@@ -9,6 +9,8 @@ from shapes import Segment, Circle, Arc, Rectangle, Ellipse, Polygon, Spline
 from view_transform import ViewTransform
 from dialogs import StyleManagerDialog, ThemeDialog
 from ui import RibbonBuilder, PropertiesPanel
+from exporters.dxf_exporter import DxfExporter
+from importers.dxf_importer import DxfImporter
 
 
 class GeometryApp(tk.Tk):
@@ -158,6 +160,7 @@ class GeometryApp(tk.Tk):
             ("╱ Отрезок", PrimitiveType.SEGMENT),
             ("○ Окружность", PrimitiveType.CIRCLE),
             ("◠ Дуга", PrimitiveType.ARC),
+            ("• Точка", PrimitiveType.POINT),
             ("▭ Прямоугольник", PrimitiveType.RECTANGLE),
             ("⬭ Эллипс", PrimitiveType.ELLIPSE),
             ("⬡ Многоугольник", PrimitiveType.POLYGON),
@@ -349,9 +352,9 @@ class GeometryApp(tk.Tk):
         left.pack(side=tk.LEFT, padx=4, pady=4)
         
         ttk.Button(left, text="📂", width=3, 
-                  command=lambda: None).pack(side=tk.LEFT, padx=1)
+                  command=self._on_open).pack(side=tk.LEFT, padx=1)
         ttk.Button(left, text="💾", width=3,
-                  command=lambda: None).pack(side=tk.LEFT, padx=1)
+                  command=self._on_save).pack(side=tk.LEFT, padx=1)
         
         ttk.Separator(left, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
         
@@ -392,6 +395,8 @@ class GeometryApp(tk.Tk):
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Файл", menu=file_menu)
         file_menu.add_command(label="Очистить всё", command=self._on_clear_all)
+        file_menu.add_separator()
+        file_menu.add_command(label="Экспорт в DXF...", command=self._on_export_dxf)
         file_menu.add_separator()
         file_menu.add_command(label="Выход", command=self.quit)
         
@@ -696,7 +701,11 @@ class GeometryApp(tk.Tk):
         max_y = max(b[3] for b in bounds_list)
         
         w, h = self.canvas.winfo_width(), self.canvas.winfo_height()
-        self.view_transform.fit_to_view((min_x, min_y, max_x, max_y), w, h, margin=80)
+        
+        # Dynamic margin: 10% of the smallest dimension, but at least 50px
+        margin = max(50, int(min(w, h) * 0.1))
+        
+        self.view_transform.fit_to_view((min_x, min_y, max_x, max_y), w, h, margin=margin)
         self._redraw_and_update()
 
     def update_status_bar(self) -> None:
@@ -716,6 +725,107 @@ class GeometryApp(tk.Tk):
             if not self.shape_manager.remove_selected():
                 self.shape_manager.remove_last()
             self.redraw()
+
+    def _on_export_dxf(self) -> None:
+        """Экспорт в DXF"""
+        from tkinter import filedialog
+        
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".dxf",
+            filetypes=[("DXF Files", "*.dxf"), ("All Files", "*.*")],
+            title="Экспорт в DXF"
+        )
+        
+        if not filename:
+            return
+            
+        # Ask for margin
+        from tkinter import simpledialog
+        margin = simpledialog.askfloat("Экспорт", "Отступ (мм):", initialvalue=20.0, minvalue=0.0)
+        if margin is None:
+            margin = 20.0 # Default if cancelled, or return? Let's default.
+            
+        try:
+            from exporters.dxf_exporter import DxfExporter
+            
+            exporter = DxfExporter()
+            exporter.export(
+                filename, 
+                self.shape_manager.get_all_shapes(),
+                self.style_manager.get_all_styles(),
+                margin=margin
+            )
+            shapes = self.shape_manager.get_all_shapes()
+            styles = self.style_manager.get_all_styles()
+            
+            # Экспортируем
+            exporter = DxfExporter()
+            exporter.export(filename, shapes, styles)
+            
+            messagebox.showinfo("Успех", f"Файл успешно сохранен:\n{filename}")
+            
+        except Exception as e:
+            messagebox.showerror("Ошибка экспорта", f"Не удалось сохранить файл:\n{e}")
+
+    def _on_save(self) -> None:
+        """Сохранить (пока просто экспорт в DXF)"""
+        self._on_export_dxf()
+
+    def _on_open(self) -> None:
+        """Открыть файл"""
+        from tkinter import filedialog
+        
+        filename = filedialog.askopenfilename(
+            filetypes=[("DXF Files", "*.dxf"), ("All Files", "*.*")],
+            title="Открыть файл"
+        )
+        
+        if not filename:
+            return
+            
+        try:
+            # Импортируем
+            importer = DxfImporter()
+            shapes = importer.import_file(filename)
+            
+            if shapes:
+                # Попытка восстановить имена стилей (обратное отображение из DXF Layer)
+                known_styles = self.style_manager.get_style_names()
+                
+                # Создаем карту: {sanitized_name: real_name}
+                # Используем логику очистки как в экспортере (простая замена)
+                style_map = {}
+                for name in known_styles:
+                    sanitized = name.replace(" ", "_").replace(".", "").replace(",", "")
+                    style_map[sanitized] = name
+                    # Также добавим прямое совпадение на случай если имя не менялось
+                    style_map[name] = name
+
+                for shape in shapes:
+                    # Если стиль найден в карте (по очищенному имени), восстанавливаем оригинал
+                    if shape.line_style_name in style_map:
+                        shape.line_style_name = style_map[shape.line_style_name]
+                    else:
+                        # Эвристика: заменяем подчеркивания на пробелы
+                        fuzzy_name = shape.line_style_name.replace("_", " ")
+                        if fuzzy_name in known_styles:
+                            shape.line_style_name = fuzzy_name
+
+                if self.shape_manager.has_shapes():
+                    if not messagebox.askyesno("Импорт", "Добавить к существующим фигурам?\n(Нет - очистить холст)"):
+                        self.shape_manager.clear_all()
+                
+                for shape in shapes:
+                    self.shape_manager.add_shape(shape)
+                
+                self.fit_all_to_view()
+                self.redraw()
+                messagebox.showinfo("Успех", f"Импортировано фигур: {len(shapes)}")
+            else:
+                messagebox.showwarning("Импорт", "Не удалось прочитать фигуры из файла")
+                
+        except Exception as e:
+            messagebox.showerror("Ошибка импорта", f"Не удалось открыть файл:\n{e}")
 
     def _on_clear_all(self) -> None:
         if self.shape_manager.has_shapes() and messagebox.askyesno("Подтверждение", "Удалить все фигуры?"):

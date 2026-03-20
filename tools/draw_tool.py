@@ -4,7 +4,7 @@ import tkinter as tk
 from typing import Optional, List, Tuple
 from enum import Enum, auto
 from .base import Tool
-from shapes import Segment, Circle, Arc, Rectangle, Ellipse, Polygon, Spline
+from shapes import Segment, Circle, Arc, Rectangle, Ellipse, Polygon, Spline, Point
 
 
 class PrimitiveType(Enum):
@@ -15,6 +15,7 @@ class PrimitiveType(Enum):
     ELLIPSE = auto()
     POLYGON = auto()
     SPLINE = auto()
+    POINT = auto()
 
 
 class CreationMode(Enum):
@@ -33,6 +34,7 @@ class CreationMode(Enum):
     ELLIPSE_BOUNDING_BOX = auto()
     POLYGON_CENTER_RADIUS = auto()
     SPLINE_POINTS = auto()
+    POINT_SINGLE = auto()
 
 
 PRIMITIVE_MODES = {
@@ -60,7 +62,9 @@ PRIMITIVE_MODES = {
         (CreationMode.ELLIPSE_BOUNDING_BOX, "Две точки"),
     ],
     PrimitiveType.POLYGON: [(CreationMode.POLYGON_CENTER_RADIUS, "Центр и радиус")],
+    PrimitiveType.POLYGON: [(CreationMode.POLYGON_CENTER_RADIUS, "Центр и радиус")],
     PrimitiveType.SPLINE: [(CreationMode.SPLINE_POINTS, "По точкам")],
+    PrimitiveType.POINT: [(CreationMode.POINT_SINGLE, "Точка")],
 }
 
 PRIMITIVE_NAMES = {
@@ -70,7 +74,9 @@ PRIMITIVE_NAMES = {
     PrimitiveType.RECTANGLE: "Прямоугольник",
     PrimitiveType.ELLIPSE: "Эллипс",
     PrimitiveType.POLYGON: "Многоугольник",
+    PrimitiveType.POLYGON: "Многоугольник",
     PrimitiveType.SPLINE: "Сплайн",
+    PrimitiveType.POINT: "Точка",
 }
 
 MODE_POINTS = {
@@ -88,7 +94,9 @@ MODE_POINTS = {
     CreationMode.ELLIPSE_CENTER_AXES: 3,
     CreationMode.ELLIPSE_BOUNDING_BOX: 2,
     CreationMode.POLYGON_CENTER_RADIUS: 2,
+    CreationMode.POLYGON_CENTER_RADIUS: 2,
     CreationMode.SPLINE_POINTS: -1,
+    CreationMode.POINT_SINGLE: 1,
 }
 
 
@@ -236,6 +244,12 @@ class DrawTool(Tool):
         elif mode == CreationMode.ARC_THREE_POINTS:
             return [("X", ""), ("Y", "")]
         
+        elif mode == CreationMode.ARC_THREE_POINTS:
+            return [("X", ""), ("Y", "")]
+        
+        elif mode == CreationMode.POINT_SINGLE:
+            return [("X", ""), ("Y", "")]
+        
         return [("Значение", "")]
     
     def _apply_numeric_input(self) -> Optional[Tuple[float, float]]:
@@ -341,6 +355,11 @@ class DrawTool(Tool):
             # Явный ввод координат следующей точки
             if v1 is not None and v2 is not None:
                 return (v1, v2)
+        
+        elif mode == CreationMode.POINT_SINGLE:
+            if v1 is not None and v2 is not None:
+                return (v1, v2)
+            return None
         
         return None
     
@@ -606,6 +625,9 @@ class DrawTool(Tool):
             
             elif mode == CreationMode.SPLINE_POINTS and len(pts) >= 2:
                 shape = Spline(list(pts), self._spline_tension)
+
+            elif mode == CreationMode.POINT_SINGLE and len(pts) >= 1:
+                shape = Point(pts[0][0], pts[0][1])
         
         except Exception as e:
             print(f"Ошибка создания: {e}")

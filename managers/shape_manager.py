@@ -88,7 +88,7 @@ class ShapeManager:
     
     def import_from_list(self, shapes_data: List[dict]) -> None:
         """Импорт фигур из списка словарей"""
-        from shapes import Segment, Circle, Arc, Rectangle, Ellipse, Polygon, Spline
+        from shapes import Segment, Circle, Arc, Rectangle, Ellipse, Polygon, Spline, Point
         
         self.clear_all()
         
@@ -100,6 +100,7 @@ class ShapeManager:
             'ellipse': Ellipse.from_dict,
             'polygon': Polygon.from_dict,
             'spline': Spline.from_dict,
+            'point': Point.from_dict,
         }
         
         for data in shapes_data:
