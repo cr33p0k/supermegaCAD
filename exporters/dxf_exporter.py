@@ -6,8 +6,20 @@ from typing import List, Any, Dict, Optional, IO
 from datetime import datetime
 
 
+# Маппинг внутренних типов линий на стандартные DXF-имена,
+# которые T-FLEX, AutoCAD и NanoCAD знают нативно
+LINETYPE_MAP = {
+    'solid': 'Continuous',
+    'dashed': 'HIDDEN',
+    'dashdot': 'CENTER',
+    'dashdotdot': 'PHANTOM',
+    'wavy': 'WAVES',
+    'broken': 'ZIGZAG',
+}
+
+
 class DxfExporter:
-    """Класс для экспорта фигур в формат DXF (AutoCAD 2000/R15)"""
+    """Класс для экспорта фигур в формат DXF (AutoCAD 2004/R18)"""
     
     def __init__(self):
         self.handle_seed = 0x10
@@ -224,6 +236,10 @@ class DxfExporter:
         
         self._write_pair(0, "ENDTAB")
 
+    def _get_dxf_linetype(self, style) -> str:
+        """Получить стандартное имя DXF-типа линии для стиля"""
+        return LINETYPE_MAP.get(style.line_type, 'Continuous')
+
     def _get_ltype_pattern(self, style) -> List[float]:
         """Преобразование параметров стиля в паттерн DXF (штрихи > 0, пробелы < 0)"""
         lt = style.line_type
@@ -232,33 +248,44 @@ class DxfExporter:
         if lt == 'dashed':
             return [dl, -gl]
         elif lt == 'dashdot':
-            return [dl, -gl, dot, -gl]
+            space = (gl - dot) / 2.0 if gl > dot else 1.0
+            return [dl, -space, dot, -space]
         elif lt == 'dashdotdot':
-            return [dl, -gl, dot, -gl, dot, -gl]
+            space = (gl - 2.0 * dot) / 3.0 if gl > 2.0 * dot else 1.0
+            return [dl, -space, dot, -space, dot, -space]
         return []
 
     def _write_table_ltype(self):
         self._write_table_head("LTYPE", self.handles["LTYPE_TABLE"])
         
-        # 1. Обязательные стандартные типы
-        base_ltypes = [
-            ("ByBlock", "", []), 
-            ("ByLayer", "", []), 
-            ("Continuous", "Solid line", [])
+        # Обязательные системные типы
+        system_ltypes = [
+            ("ByBlock", "", []),
+            ("ByLayer", "", []),
+            ("Continuous", "Solid line", []),
         ]
         
-        # 2. Генерация типов из стилей приложения
-        style_ltypes = []
+        # Стандартные типы, которые T-FLEX/AutoCAD знают нативно
+        # WAVES и ZIGZAG — пустой паттерн, CAD использует свои внутренние определения
+        standard_ltypes = [
+            ("WAVES", "Wavy line", []),
+            ("ZIGZAG", "Zigzag line", []),
+        ]
+        
+        # Типы из стилей (dashed, dashdot, dashdotdot)
+        seen_names = set()
+        dynamic_ltypes = []
         for style in self.styles:
-            if style.line_type in ['solid', 'wavy', 'broken']:
+            dxf_name = self._get_dxf_linetype(style)
+            if dxf_name in ('Continuous', 'WAVES', 'ZIGZAG'):
                 continue
-                
-            ltype_name = f"LT_{self._sanitize_name(style.name)}"
+            if dxf_name in seen_names:
+                continue
+            seen_names.add(dxf_name)
             pattern = self._get_ltype_pattern(style)
-            desc = f"Pattern: {style.line_type}"
-            style_ltypes.append((ltype_name, desc, pattern))
+            dynamic_ltypes.append((dxf_name, f"{style.line_type}", pattern))
             
-        for name, desc, pat in base_ltypes + style_ltypes:
+        for name, desc, pat in system_ltypes + standard_ltypes + dynamic_ltypes:
             h = self._next_handle()
             self._write_pair(0, "LTYPE")
             self._write_pair(5, h)
@@ -283,7 +310,7 @@ class DxfExporter:
     def _write_table_layer(self):
         self._write_table_head("LAYER", self.handles["LAYER_TABLE"])
         
-        # 0 Layer
+        # Слой 0 (обязательный)
         h = self._next_handle()
         self._write_pair(0, "LAYER")
         self._write_pair(5, h)
@@ -300,11 +327,7 @@ class DxfExporter:
             safe_name = self._sanitize_name(style.name)
             if safe_name == "0": continue
             
-            # Определяем имя типа линии для этого слоя
-            if style.line_type in ['solid', 'wavy', 'broken']:
-                ltype = "Continuous"
-            else:
-                ltype = f"LT_{safe_name}"
+            dxf_ltype = self._get_dxf_linetype(style)
             
             h = self._next_handle()
             self._write_pair(0, "LAYER")
@@ -315,21 +338,9 @@ class DxfExporter:
             self._write_pair(2, safe_name)
             self._write_pair(70, 0)
             self._write_pair(62, 7)
-            self._write_pair(6, ltype)
+            self._write_pair(6, dxf_ltype)
             self._write_pair(390, "F")
 
-        # Sheet_Border Layer
-        h = self._next_handle()
-        self._write_pair(0, "LAYER")
-        self._write_pair(5, h)
-        self._write_pair(330, self.handles["LAYER_TABLE"])
-        self._write_pair(100, "AcDbSymbolTableRecord")
-        self._write_pair(100, "AcDbLayerTableRecord")
-        self._write_pair(2, "Sheet_Border")
-        self._write_pair(70, 0)
-        self._write_pair(62, 8) # Grayish
-        self._write_pair(6, "Continuous")
-        self._write_pair(390, "F")
 
         self._write_pair(0, "ENDTAB")
 
@@ -489,31 +500,6 @@ class DxfExporter:
             except Exception as e:
                 print(f"Error exporting shape {shape}: {e}")
                 
-        # Draw physical boundary for sheet (to enforce margin in tools like T-FLEX)
-        self._write_pair(0, "LWPOLYLINE")
-        self._write_pair(5, self._next_handle())
-        
-        self._write_pair(330, self.handles["T_MODEL_SPACE"])
-        self._write_pair(100, "AcDbEntity")
-        self._write_pair(8, "Sheet_Border") # Special layer
-        self._write_pair(62, 8) # Gray color
-        self._write_pair(6, "Continuous")
-        self._write_pair(100, "AcDbPolyline")
-        
-        self._write_pair(90, 4) # 4 vertices
-        self._write_pair(70, 1) # Closed bool
-        self._write_pair(43, 0.0) # Constant width
-        
-        verts = [
-            (self.ext_min[0], self.ext_min[1]),
-            (self.ext_max[0], self.ext_min[1]),
-            (self.ext_max[0], self.ext_max[1]),
-            (self.ext_min[0], self.ext_max[1])
-        ]
-        
-        for vx, vy in verts:
-            self._write_pair(10, vx)
-            self._write_pair(20, vy)
                 
         self._write_pair(0, "ENDSEC")
 
@@ -561,33 +547,50 @@ class DxfExporter:
             return (r << 16) | (g << 8) | b
         return 0
 
-    def _write_common_entity_props(self, entity_type: str, shape: Any, force_continuous: bool = False, force_layer: Optional[str] = None):
+    def _write_common_entity_props(self, entity_type: str, shape: Any, force_layer: Optional[str] = None):
         """Запись общих свойств примитива"""
         self._write_pair(0, entity_type)
         self._write_pair(5, self._next_handle())
         
-        # CRITICAL: Link to Model Space
+        # Привязка к Model Space
         self._write_pair(330, self.handles["T_MODEL_SPACE"])
         
         self._write_pair(100, "AcDbEntity")
         
-        # Layer
+        # Слой
         layer = force_layer if force_layer is not None else self._sanitize_name(shape.line_style_name)
         self._write_pair(8, layer or "0")
         
-        # Цвет
-        aci = self._map_color(shape.color)
-        if aci != 256:
-             self._write_pair(62, aci)
+        # Цвет (TrueColor через код 420)
+        self._write_pair(420, self._get_true_color(shape.color))
+        
+        # Тип линии — напрямую из стиля фигуры
+        style = self._get_shape_style(shape)
+        if style:
+            dxf_ltype = self._get_dxf_linetype(style)
+            self._write_pair(6, dxf_ltype)
+            
+            # Масштаб типа линии, чтобы волны/штрихи не были огромными
+            ltscale = 1.0
+            if style.line_type == 'wavy':
+                # Для T-FLEX масштаб типа линии напрямую влияет на плотность волн
+                # Уменьшаем масштаб, чтобы волн было больше
+                ltscale = max(0.01, style.wave_length / 100.0)
+            elif style.line_type == 'broken':
+                ltscale = max(0.01, style.break_width / 100.0)
+            elif style.line_type in ('dashed', 'dashdot', 'dashdotdot'):
+                ltscale = max(0.01, style.dash_length / 10.0)
+                
+            self._write_pair(48, ltscale)
         else:
-             self._write_pair(420, self._get_true_color(shape.color))
-             
-        if force_continuous:
             self._write_pair(6, "Continuous")
-        else:
-            self._write_pair(6, "BYLAYER")
+            self._write_pair(48, 1.0)
         
         self._write_pair(100, f"AcDb{entity_type.title().replace('Lwpolyline', 'Polyline')}")
+
+    def _get_shape_style(self, shape: Any):
+        """Найти стиль фигуры в списке стилей"""
+        return next((s for s in self.styles if s.name == shape.line_style_name), None)
 
     def _write_entity(self, shape: Any):
         stype = shape.to_dict().get('type')
@@ -607,41 +610,13 @@ class DxfExporter:
         self._write_pair(30, 0.0)
 
     def _write_line(self, shape):
-        # Check if style requires geometric emulation
-        style_name = shape.line_style_name
-        # Find style definition
-        style = next((s for s in self.styles if s.name == style_name), None)
-        
-        if style and style.line_type in ['wavy', 'broken']:
-            # Emulate as Polyline using arcs (bulges) instead of point clouds
-            if style.line_type == 'wavy':
-                verts = self._generate_wavy_vertices(shape.x1, shape.y1, shape.x2, shape.y2, 
-                                                   style.wave_amplitude, style.wave_length)
-            else: # broken
-                pts = self._generate_broken_points(shape.x1, shape.y1, shape.x2, shape.y2,
-                                                 style.break_height, style.break_width, style.break_count)
-                verts = [(vx, vy, 0.0) for vx, vy in pts]
-            
-            # Write as open LWPOLYLINE
-            self._write_common_entity_props("LWPOLYLINE", shape, force_continuous=True, force_layer="0")
-            self._write_pair(90, len(verts)) 
-            self._write_pair(70, 0) # Open
-            self._write_pair(43, 0.0) 
-            
-            for vx, vy, bulge in verts:
-                self._write_pair(10, vx)
-                self._write_pair(20, vy)
-                if abs(bulge) > 0.000001:
-                    self._write_pair(42, bulge)
-        else:
-            # Standard Line
-            self._write_common_entity_props("LINE", shape)
-            self._write_pair(10, shape.x1)
-            self._write_pair(20, shape.y1)
-            self._write_pair(30, 0.0)
-            self._write_pair(11, shape.x2)
-            self._write_pair(21, shape.y2)
-            self._write_pair(31, 0.0)
+        self._write_common_entity_props("LINE", shape)
+        self._write_pair(10, shape.x1)
+        self._write_pair(20, shape.y1)
+        self._write_pair(30, 0.0)
+        self._write_pair(11, shape.x2)
+        self._write_pair(21, shape.y2)
+        self._write_pair(31, 0.0)
 
     def _write_circle(self, shape):
         self._write_common_entity_props("CIRCLE", shape)
@@ -665,7 +640,6 @@ class DxfExporter:
         self._write_pair(20, shape.cy)
         self._write_pair(30, 0.0)
         
-        import math
         rad = math.radians(shape.rotation)
         dx = shape.rx * math.cos(rad)
         dy = shape.rx * math.sin(rad)
@@ -681,40 +655,37 @@ class DxfExporter:
 
     def _write_lwpolyline_rect(self, shape):
         self._write_common_entity_props("LWPOLYLINE", shape)
-        self._write_pair(90, 4) 
-        self._write_pair(70, 1) 
-        self._write_pair(43, 0.0) 
+        self._write_pair(90, 4)
+        self._write_pair(70, 1)
+        self._write_pair(43, 0.0)
 
         left = min(shape.x, shape.x + shape.width)
         right = max(shape.x, shape.x + shape.width)
         top = min(shape.y, shape.y + shape.height)
         bottom = max(shape.y, shape.y + shape.height)
         
-        verts = [(left, top), (right, top), (right, bottom), (left, bottom)]
-        for vx, vy in verts:
+        for vx, vy in [(left, top), (right, top), (right, bottom), (left, bottom)]:
             self._write_pair(10, vx)
             self._write_pair(20, vy)
 
     def _write_lwpolyline_poly(self, shape):
-        self._write_common_entity_props("LWPOLYLINE", shape)
-        
         if hasattr(shape, 'get_vertices'):
-             verts = shape.get_vertices()
+            corners = shape.get_vertices()
         else:
-             # Fallback
-             verts = []
-             cx, cy = shape.cx, shape.cy
-             r = shape.radius
-             sides = shape.num_sides
-             rot = math.radians(shape.rotation)
-             step = 2.0 * math.pi / sides
-             for i in range(sides):
-                 angle = rot + i * step
-                 verts.append((cx + r * math.cos(angle), cy + r * math.sin(angle)))
-             
-        self._write_pair(90, len(verts))
-        self._write_pair(70, 1) 
-        for vx, vy in verts:
+            corners = []
+            cx, cy = shape.cx, shape.cy
+            r = shape.radius
+            sides = shape.num_sides
+            rot = math.radians(shape.rotation)
+            step = 2.0 * math.pi / sides
+            for i in range(sides):
+                angle = rot + i * step
+                corners.append((cx + r * math.cos(angle), cy + r * math.sin(angle)))
+        
+        self._write_common_entity_props("LWPOLYLINE", shape)
+        self._write_pair(90, len(corners))
+        self._write_pair(70, 1)
+        for vx, vy in corners:
             self._write_pair(10, vx)
             self._write_pair(20, vy)
 
@@ -726,84 +697,17 @@ class DxfExporter:
         self._write_pair(210, 0.0)
         self._write_pair(220, 0.0)
         self._write_pair(230, 1.0)
-        self._write_pair(70, 8) 
-        self._write_pair(71, degree) 
-        self._write_pair(72, len(pts)) 
-        self._write_pair(73, len(pts)) 
-        self._write_pair(74, 0) 
+        self._write_pair(70, 8)
+        self._write_pair(71, degree)
+        self._write_pair(72, len(pts))
+        self._write_pair(73, len(pts))
+        self._write_pair(74, 0)
         
         num_knots = len(pts) + degree + 1
         for i in range(num_knots):
-             self._write_pair(40, float(i))
+            self._write_pair(40, float(i))
              
         for px, py in pts:
             self._write_pair(10, px)
             self._write_pair(20, py)
             self._write_pair(30, 0.0)
-
-    def _generate_wavy_vertices(self, x1, y1, x2, y2, amplitude, wavelength):
-        length = math.hypot(x2 - x1, y2 - y1)
-        if length < 1: return [(x1, y1, 0.0), (x2, y2, 0.0)]
-        
-        angle = math.atan2(y2 - y1, x2 - x1)
-        cos_a = math.cos(angle)
-        sin_a = math.sin(angle)
-        
-        # A wave consists of 2 bumps (up and down) per wavelength.
-        bump_length = wavelength / 2.0
-        num_bumps = max(2, int(length / bump_length))
-        
-        # To hit the target exactly, we adjust bump_length slightly to perfectly divide the length
-        bump_length = length / num_bumps
-        
-        # Bulge = 2 * h / d, where h = amplitude, d = bump_length
-        bulge = (2.0 * amplitude) / bump_length
-        
-        vertices = []
-        for i in range(num_bumps):
-            t = i * bump_length
-            vx = x1 + t * cos_a
-            vy = y1 + t * sin_a
-            # Alternate bulge direction
-            b = bulge if i % 2 == 0 else -bulge
-            vertices.append((vx, vy, b))
-            
-        # The last point has no bulge (0.0)
-        vertices.append((x2, y2, 0.0))
-        return vertices
-
-    def _generate_broken_points(self, x1, y1, x2, y2, break_height, break_width, break_count):
-        length = math.hypot(x2 - x1, y2 - y1)
-        if length < 20 or break_count < 1: return [(x1, y1), (x2, y2)]
-        angle = math.atan2(y2 - y1, x2 - x1)
-        perp_x = -math.sin(angle)
-        perp_y = math.cos(angle)
-        dir_x = math.cos(angle)
-        dir_y = math.sin(angle)
-        points = [(x1, y1)]
-        
-        margin = break_width * 2
-        usable_length = length - 2 * margin
-        if usable_length <= 0: return [(x1, y1), (x2, y2)]
-        spacing = usable_length / (break_count + 1)
-        
-        for i in range(break_count):
-            t = margin + spacing * (i + 1)
-            t_normalized = t / length
-            break_x = x1 + (x2 - x1) * t_normalized
-            break_y = y1 + (y2 - y1) * t_normalized
-            
-            p1_x = break_x - dir_x * break_width
-            p1_y = break_y - dir_y * break_width
-            p2_x = break_x - dir_x * (break_width / 3) + perp_x * break_height
-            p2_y = break_y - dir_y * (break_width / 3) + perp_y * break_height
-            p3_x = break_x + dir_x * (break_width / 3) - perp_x * break_height
-            p3_y = break_y + dir_y * (break_width / 3) - perp_y * break_height
-            p4_x = break_x + dir_x * break_width
-            p4_y = break_y + dir_y * break_width
-            
-            points.extend([(p1_x, p1_y), (p2_x, p2_y), (p3_x, p3_y), (p4_x, p4_y)])
-            
-        points.append((x2, y2))
-        return points
-

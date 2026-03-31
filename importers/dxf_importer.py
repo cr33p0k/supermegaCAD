@@ -1,241 +1,228 @@
-"""
-Модуль для импорта из формата DXF
-"""
 import math
-from typing import List, Tuple, Dict, Any, Optional
+import re
+from typing import List, Any
+import ezdxf
 
-from shapes import Point, Segment, Circle, Arc, Ellipse, Polygon, Spline
-
+from shapes import Point, Segment, Circle, Arc, Ellipse, Spline
 
 class DxfImporter:
-    """Класс для импорта фигур из формата DXF (AutoCAD 2000/R15 и новее)"""
+    """Класс для импорта фигур из формата DXF через ezdxf"""
     
     def __init__(self):
         self.shapes = []
-        self.styles = [] # Не используется пока, но можно сохранять слои как стили
-        self.current_layer = "0"
-        self.layers = {} # name -> properties
         
     def import_file(self, filename: str) -> List[Any]:
-        """
-        Импорт списка фигур из DXF файла
-        
-        Args:
-            filename: Путь к файлу
-            
-        Returns:
-            Список фигур (наследников Shape)
-        """
         self.shapes = []
-        self.layers = {}
         
         try:
-            # Пытаемся читать с разными кодировками
-            try:
-                with open(filename, 'r', encoding='cp1251') as f:
-                    content = f.readlines()
-            except UnicodeDecodeError:
-                with open(filename, 'r', encoding='utf-8') as f:
-                    content = f.readlines()
-        except Exception as e:
-            print(f"Error opening file: {e}")
-            return []
+            doc = ezdxf.readfile(filename)
+            msp = doc.modelspace()
             
-        # Парсинг пар код-значение
-        pairs = []
-        i = 0
-        while i < len(content) - 1:
-            try:
-                code = int(content[i].strip())
-                value = content[i+1].strip()
-                pairs.append((code, value))
-                i += 2
-            except ValueError:
-                i += 1
-                continue
-                
-        # Обработка секции ENTITIES
-        self._parse_entities(pairs)
-        
-        return self.shapes
-
-    def _parse_entities(self, pairs: List[Tuple[int, str]]) -> None:
-        """Парсинг секции ENTITIES"""
-        in_entities_section = False
-        i = 0
-        
-        while i < len(pairs):
-            code, value = pairs[i]
-            
-            if code == 0 and value == "SECTION":
-                # Checking next pair for section name
-                if i + 1 < len(pairs) and pairs[i+1][0] == 2:
-                    if pairs[i+1][1] == "ENTITIES":
-                        in_entities_section = True
-                        i += 2
-                        continue
-            
-            if code == 0 and value == "ENDSEC":
-                if in_entities_section:
-                    in_entities_section = False
+            # Разворачиваем блоки (INSERT -> базовые примитивы)
+            while True:
+                inserts = msp.query('INSERT')
+                if not inserts:
                     break
-            
-            if in_entities_section and code == 0:
-                # Начало новой сущности
-                entity_type = value
-                # Собираем данные сущности до следующего кода 0
-                entity_data = []
-                j = i + 1
-                while j < len(pairs) and pairs[j][0] != 0:
-                    entity_data.append(pairs[j])
-                    j += 1
+                for insert in inserts:
+                    insert.explode()
+                    
+            for entity in msp:
+                layer_name, style_name, color_hex = self._get_entity_style(entity, doc)
+                if layer_name == "Sheet_Border":
+                    continue
+                    
+                self._create_shape_from_entity(entity, layer_name, style_name, color_hex)
                 
-                self._create_shape_from_entity(entity_type, entity_data)
-                
-                # Пропускаем обработанные пары (минус 1, так как цикл while i увеличит)
-                i = j - 1
+            print(f"DXF успешно импортирован. Версия: {doc.dxfversion}")
+            print(f"Загружено примитивов: {len(self.shapes)}")
             
-            i += 1
+            return self.shapes
+        except Exception as e:
+            print(f"Error importing DXF: {e}")
+            return []
 
-    def _get_value(self, data: List[Tuple[int, str]], code: int, default: Any = None) -> Any:
-        """Получить значение по коду DXF"""
-        for c, v in data:
-            if c == code:
+    def _rgb_to_hex(self, rgb):
+        return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+
+    def _decode_autocad_text(self, text):
+        if not isinstance(text, str):
+            return text
+        return re.sub(r'\\U\+([0-9A-Fa-f]{4})', lambda m: chr(int(m.group(1), 16)), text)
+
+    def _get_entity_style(self, entity, doc):
+        """Определяем слой, стиль линии (в терминологии программы) и цвет (в HEX)"""
+        
+        # 1. СЛОЙ
+        raw_layer = entity.dxf.layer if entity.dxf.hasattr('layer') else '0'
+        layer_name = self._decode_autocad_text(raw_layer)
+        if layer_name.lower() == 'defpoints':
+            layer_name = '0'
+            
+        # 2. ТИП ЛИНИИ -> СТИЛЬ
+        dxf_linetype = entity.dxf.linetype if entity.dxf.hasattr('linetype') else 'ByLayer'
+        if dxf_linetype.upper() == 'BYLAYER':
+            try:
+                layer_obj = doc.layers.get(raw_layer)
+                dxf_linetype = layer_obj.dxf.linetype
+            except Exception:
+                dxf_linetype = 'Continuous'
+                
+        base_linetype = dxf_linetype.upper().split('_')[0]
+        
+        DXF_TO_STYLE = {
+            'CONTINUOUS': 'Сплошная основная',
+            'THIN': 'Сплошная тонкая',
+            'WAVES': 'Сплошная волнистая',
+            'ZIGZAG': 'Сплошная тонкая с изломами',
+            'HIDDEN': 'Штриховая',
+            'CENTER2': 'Штрихпунктирная утолщенная',
+            'CENTER': 'Штрихпунктирная тонкая',
+            'PHANTOM': 'Штрихпунктирная с двумя точками'
+        }
+        style_name = DXF_TO_STYLE.get(base_linetype, 'Сплошная основная')
+        
+        # Если Continuous — определяем толщину (основная или тонкая)
+        if style_name == 'Сплошная основная':
+            lineweight = entity.dxf.lineweight if entity.dxf.hasattr('lineweight') else -1
+            if lineweight == -1: # ByLayer
                 try:
-                    if isinstance(default, float):
-                        return float(v)
-                    if isinstance(default, int):
-                        return int(v)
-                    return v
-                except ValueError:
-                    return default
-        return default
-
-    def _get_all_values(self, data: List[Tuple[int, str]], code: int) -> List[Any]:
-        """Получить все значения с данным кодом"""
-        values = []
-        for c, v in data:
-            if c == code:
-                try:
-                    values.append(float(v))
-                except ValueError:
-                    values.append(v)
-        return values
-
-    def _create_shape_from_entity(self, entity_type: str, data: List[Tuple[int, str]]) -> None:
-        """Создание фигуры из данных сущности"""
-        layer = self._get_value(data, 8, "0")
-        color_code = self._get_value(data, 62, 256) # 256 = ByLayer
-        
-        # Маппинг цвета (упрощенно)
-        color = "#ffffff" # Default white
-        if color_code == 1: color = "#ff5555" # Red
-        elif color_code == 2: color = "#ffff55" # Yellow
-        elif color_code == 3: color = "#55ff55" # Green
-        elif color_code == 4: color = "#55ffff" # Cyan
-        elif color_code == 5: color = "#5555ff" # Blue
-        elif color_code == 6: color = "#ff55ff" # Magenta
-        elif color_code == 7: color = "#ffffff" # White
-        
-        # Стиль линии по слою (пытаемся найти совпадение имени слоя с именем стиля)
-        # В этой версии просто сохраняем имя слоя, ShapeManager/DrawTool может подхватить если стиль существует
-        line_style = layer
-        
-        shape = None
-        
-        if entity_type == "POINT":
-            x = self._get_value(data, 10, 0.0)
-            y = self._get_value(data, 20, 0.0)
-            shape = Point(x, y)
+                    layer_obj = doc.layers.get(raw_layer)
+                    lineweight = layer_obj.dxf.lineweight if layer_obj.dxf.hasattr('lineweight') else -3
+                except Exception:
+                    lineweight = -3
             
-        elif entity_type == "LINE":
-            x1 = self._get_value(data, 10, 0.0)
-            y1 = self._get_value(data, 20, 0.0)
-            x2 = self._get_value(data, 11, 0.0)
-            y2 = self._get_value(data, 21, 0.0)
-            shape = Segment(x1, y1, x2, y2)
-            
-        elif entity_type == "CIRCLE":
-            cx = self._get_value(data, 10, 0.0)
-            cy = self._get_value(data, 20, 0.0)
-            r = self._get_value(data, 40, 1.0)
-            shape = Circle(cx, cy, r)
-            
-        elif entity_type == "ARC":
-            cx = self._get_value(data, 10, 0.0)
-            cy = self._get_value(data, 20, 0.0)
-            r = self._get_value(data, 40, 1.0)
-            start_angle = self._get_value(data, 50, 0.0)
-            end_angle = self._get_value(data, 51, 0.0)
-            shape = Arc(cx, cy, r, start_angle, end_angle)
-            
-        elif entity_type == "ELLIPSE":
-            cx = self._get_value(data, 10, 0.0)
-            cy = self._get_value(data, 20, 0.0)
-            dx = self._get_value(data, 11, 1.0)
-            dy = self._get_value(data, 21, 0.0)
-            ratio = self._get_value(data, 40, 1.0)
-            
-            rx = math.hypot(dx, dy)
-            ry = rx * ratio
-            rotation = math.degrees(math.atan2(dy, dx))
-            
-            shape = Ellipse(cx, cy, rx, ry, rotation)
-            
-        elif entity_type == "LWPOLYLINE":
-            # Легковесная полилиния
-            num_verts = self._get_value(data, 90, 0)
-            flag = self._get_value(data, 70, 0)
-            is_closed = (flag & 1) != 0
-            
-            xs = self._get_all_values(data, 10)
-            ys = self._get_all_values(data, 20)
-            
-            points = list(zip(xs, ys))
-            
-            if len(points) >= 2:
-                # Check for procedural style override
-                final_style = line_style
-                is_procedural = any(x in line_style.lower() for x in ['wavy', 'broken', 'волнист', 'излом'])
-                if is_procedural:
-                    final_style = "Сплошная основная"
-
-                # Импортируем как набор сегментов для надежности
-                for k in range(len(points) - 1):
-                    s = Segment(points[k][0], points[k][1], points[k+1][0], points[k+1][1])
-                    s.color = color
-                    s.line_style_name = final_style
-                    self.shapes.append(s)
+            # Если толщина задана и она меньше 0.6мм (60 в ezdxf), считаем линию тонкой
+            if 0 <= lineweight < 60:
+                style_name = 'Сплошная тонкая'
                 
-                if is_closed:
-                    s = Segment(points[-1][0], points[-1][1], points[0][0], points[0][1])
-                    s.color = color
-                    s.line_style_name = final_style
-                    self.shapes.append(s)
-                return # Специальный случай, уже добавили фигуры
+        # В fallback (если T-FLEX пишет тип линии прямо в имя слоя)
+        if layer_name in DXF_TO_STYLE.values() and base_linetype == 'CONTINUOUS':
+            style_name = layer_name
             
-        elif entity_type == "SPLINE":
-            # Сплайн через контрольные точки
-            # Degree 71
-            # Knots 40
-            # Control points 10, 20, 30
-            
-            xs = self._get_all_values(data, 10)
-            ys = self._get_all_values(data, 20)
-            points = list(zip(xs, ys))
-            
-            if points:
-                shape = Spline(points)
+        # 3. ЦВЕТ
+        rgb = (255, 255, 255)
+        color_index = entity.dxf.color if entity.dxf.hasattr('color') else 256
         
-        if shape:
-            shape.color = color
+        if entity.dxf.hasattr('true_color'):
+            rgb = ezdxf.colors.int2rgb(entity.dxf.true_color)
+        elif color_index == 256: # ByLayer
+            try:
+                layer_obj = doc.layers.get(raw_layer)
+                if layer_obj.dxf.hasattr('true_color'):
+                    rgb = ezdxf.colors.int2rgb(layer_obj.dxf.true_color)
+                else:
+                    rgb = ezdxf.colors.aci2rgb(abs(layer_obj.color))
+            except Exception:
+                pass
+        elif color_index != 0:
+            rgb = ezdxf.colors.aci2rgb(color_index)
             
-            # Special handling for procedural styles on baked geometry
-            # If we imported a Polyline (baked wave), we don't want to apply the wave style again
-            is_procedural = any(x in line_style.lower() for x in ['wavy', 'broken', 'волнист', 'излом'])
-            if is_procedural and (entity_type == "LWPOLYLINE" or entity_type == "SPLINE"):
-                shape.line_style_name = "Сплошная основная" # Force solid
+        color_hex = self._rgb_to_hex(rgb)
+        return layer_name, style_name, color_hex
+
+    def _create_shape_from_entity(self, entity, layer_name, style_name, color_hex):
+        etype = entity.dxftype()
+        shapes_to_add = []
+        
+        if etype == 'LINE':
+            s = Segment(entity.dxf.start.x, entity.dxf.start.y, entity.dxf.end.x, entity.dxf.end.y)
+            shapes_to_add.append(s)
+            
+        elif etype == 'POINT':
+            s = Point(entity.dxf.location.x, entity.dxf.location.y)
+            shapes_to_add.append(s)
+            
+        elif etype == 'CIRCLE':
+            s = Circle(entity.dxf.center.x, entity.dxf.center.y, entity.dxf.radius)
+            shapes_to_add.append(s)
+            
+        elif etype == 'ARC':
+            s = Arc(
+                entity.dxf.center.x, entity.dxf.center.y, entity.dxf.radius,
+                entity.dxf.start_angle,
+                entity.dxf.end_angle
+            )
+            shapes_to_add.append(s)
+            
+        elif etype == 'ELLIPSE':
+            center = (entity.dxf.center.x, entity.dxf.center.y)
+            major_axis = entity.dxf.major_axis
+            ratio = entity.dxf.ratio
+            
+            a_x = center[0] + major_axis[0]
+            a_y = center[1] + major_axis[1]
+            
+            major_len = math.hypot(major_axis[0], major_axis[1])
+            minor_len = major_len * ratio
+            
+            if major_len > 1e-9:
+                nx, ny = major_axis[0] / major_len, major_axis[1] / major_len
             else:
-                shape.line_style_name = line_style
+                nx, ny = 1.0, 0.0
                 
+            extrusion = getattr(entity.dxf, 'extrusion', (0,0,1))
+            if extrusion[2] < 0:
+                ox, oy = ny, -nx
+            else:
+                ox, oy = -ny, nx
+                
+            b_x = center[0] + ox * minor_len
+            b_y = center[1] + oy * minor_len
+            
+            s = Ellipse.from_center_and_axes(center[0], center[1], a_x, a_y, b_x, b_y)
+            shapes_to_add.append(s)
+            
+        elif etype in ('LWPOLYLINE', 'POLYLINE'):
+            points = []
+            if etype == 'POLYLINE':
+                for v in entity.vertices: points.append((v.dxf.location.x, v.dxf.location.y))
+            else:
+                with entity.points() as pts:
+                    for p in pts: points.append((p[0], p[1]))
+            
+            if not points:
+                return
+                
+            if len(points) > 20: 
+                s = Spline(points)
+                shapes_to_add.append(s)
+            elif len(points) > 2 and math.hypot(points[0][0]-points[-1][0], points[0][1]-points[-1][1]) < 1e-5:
+                # Замкнутый полигон
+                for i in range(len(points) - 1):
+                    shapes_to_add.append(Segment(points[i][0], points[i][1], points[i+1][0], points[i+1][1]))
+            else:
+                # Раскладываем виртуальные примитивы (чтобы поддержать bulge дуги в LWPOLYLINE)
+                for v_ent in entity.virtual_entities():
+                    if v_ent.dxftype() == 'LINE':
+                        shapes_to_add.append(Segment(v_ent.dxf.start.x, v_ent.dxf.start.y, v_ent.dxf.end.x, v_ent.dxf.end.y))
+                    elif v_ent.dxftype() == 'ARC':
+                        shapes_to_add.append(Arc(
+                            v_ent.dxf.center.x, v_ent.dxf.center.y, v_ent.dxf.radius,
+                            v_ent.dxf.start_angle,
+                            v_ent.dxf.end_angle
+                        ))
+
+        elif etype == 'SPLINE':
+            pts = []
+            if hasattr(entity, 'control_points') and entity.control_points:
+                pts = [(p[0], p[1]) for p in entity.control_points]
+            elif hasattr(entity, 'fit_points') and entity.fit_points:
+                pts = [(p[0], p[1]) for p in entity.fit_points]
+                
+            if pts:
+                s = Spline(pts)
+                shapes_to_add.append(s)
+                
+        # Настраиваем свойства для всех сгенерированных фигур
+        for shape in shapes_to_add:
+            shape.color = color_hex
+            
+            # Защита: если пришла взорванная в LWPOLYLINE процедурная линия, мы ставим ей сплошной стиль
+            is_procedural = any(x in style_name.lower() for x in ['волнист', 'излом', 'wavy', 'broken'])
+            if is_procedural and etype in ('LWPOLYLINE', 'SPLINE'):
+                shape.line_style_name = 'Сплошная основная'
+            else:
+                shape.line_style_name = style_name
+                
+            shape.layer_name = layer_name
             self.shapes.append(shape)

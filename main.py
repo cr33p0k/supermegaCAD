@@ -748,19 +748,11 @@ class GeometryApp(tk.Tk):
         try:
             from exporters.dxf_exporter import DxfExporter
             
-            exporter = DxfExporter()
-            exporter.export(
-                filename, 
-                self.shape_manager.get_all_shapes(),
-                self.style_manager.get_all_styles(),
-                margin=margin
-            )
             shapes = self.shape_manager.get_all_shapes()
             styles = self.style_manager.get_all_styles()
             
-            # Экспортируем
             exporter = DxfExporter()
-            exporter.export(filename, shapes, styles)
+            exporter.export(filename, shapes, styles, margin=margin)
             
             messagebox.showinfo("Успех", f"Файл успешно сохранен:\n{filename}")
             
