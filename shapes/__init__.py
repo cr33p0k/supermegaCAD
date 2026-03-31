@@ -1,6 +1,7 @@
 """Модуль для работы с геометрическими фигурами"""
 from .base import Shape
 from .segment import Segment
+from .dimension import Dimension, LinearDimension, RadialDimension, AngularDimension
 from .circle import Circle
 from .arc import Arc
 from .rectangle import Rectangle
@@ -12,6 +13,7 @@ from .point import Point
 __all__ = [
     'Shape', 
     'Segment', 
+    'Dimension', 'LinearDimension', 'RadialDimension', 'AngularDimension',
     'Circle', 
     'Arc', 
     'Rectangle', 

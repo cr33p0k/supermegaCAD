@@ -147,7 +147,7 @@ class Spline(Shape):
                 pass
     
     def to_dict(self) -> dict:
-        return {'type': 'spline', 'points': self.points, 'tension': self.tension,
+        return {'id': self.id, 'type': 'spline', 'points': self.points, 'tension': self.tension,
                 'color': self.color, 'line_style_name': self.line_style_name}
     
     @staticmethod
@@ -155,6 +155,7 @@ class Spline(Shape):
         spline = Spline([tuple(p) for p in data.get('points', [])], data.get('tension', 0.5))
         spline.color = data.get('color', spline.color)
         spline.line_style_name = data.get('line_style_name', spline.line_style_name)
+        spline.id = data.get('id', spline.id)
         return spline
     
     def __repr__(self) -> str:

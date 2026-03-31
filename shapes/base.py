@@ -3,11 +3,14 @@ from abc import ABC, abstractmethod
 from typing import Any, List, Tuple, Optional
 
 
+import uuid
+
 class Shape(ABC):
     """Абстрактный базовый класс для всех фигур"""
     
     def __init__(self):
-        self.color = "#ff5555"  # Цвет по умолчанию
+        self.id = uuid.uuid4().hex  # Уникальный идентификатор
+        self.color = "#ffffff"  # Цвет по умолчанию (белый для черного фона)
         self.selected = False
         self.line_style_name = "Сплошная основная"  # Стиль линии по умолчанию
     

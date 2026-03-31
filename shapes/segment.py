@@ -109,7 +109,7 @@ class Segment(Shape):
         return None
     
     def to_dict(self) -> dict:
-        return {'type': 'segment', 'x1': self.x1, 'y1': self.y1, 'x2': self.x2, 'y2': self.y2,
+        return {'id': self.id, 'type': 'segment', 'x1': self.x1, 'y1': self.y1, 'x2': self.x2, 'y2': self.y2,
                 'color': self.color, 'line_style_name': self.line_style_name}
     
     @staticmethod
@@ -117,6 +117,7 @@ class Segment(Shape):
         seg = Segment(data['x1'], data['y1'], data['x2'], data['y2'])
         seg.color = data.get('color', seg.color)
         seg.line_style_name = data.get('line_style_name', seg.line_style_name)
+        seg.id = data.get('id', seg.id)
         return seg
     
     def __repr__(self) -> str:

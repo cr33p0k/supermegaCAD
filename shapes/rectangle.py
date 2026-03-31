@@ -301,7 +301,7 @@ class Rectangle(Shape):
         self.height = max(1, self.height)
     
     def to_dict(self) -> dict:
-        return {'type': 'rectangle', 'x': self.x, 'y': self.y,
+        return {'id': self.id, 'type': 'rectangle', 'x': self.x, 'y': self.y,
                 'width': self.width, 'height': self.height,
                 'corner_radius': self.corner_radius, 'chamfer': self.chamfer,
                 'rotation': self.rotation,
@@ -314,6 +314,7 @@ class Rectangle(Shape):
                         data.get('rotation', 0))
         rect.color = data.get('color', rect.color)
         rect.line_style_name = data.get('line_style_name', rect.line_style_name)
+        rect.id = data.get('id', rect.id)
         return rect
     
     def __repr__(self) -> str:

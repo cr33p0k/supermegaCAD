@@ -5,6 +5,7 @@ from .select_tool import SelectTool
 from .edit_tool import EditTool
 from .pan_tool import PanTool
 from .navigation_handler import NavigationHandler
+from .dimension_tool import DimensionTool
 
 __all__ = [
     'Tool', 
@@ -16,5 +17,6 @@ __all__ = [
     'SelectTool', 
     'EditTool',
     'PanTool', 
-    'NavigationHandler'
+    'NavigationHandler',
+    'DimensionTool'
 ]

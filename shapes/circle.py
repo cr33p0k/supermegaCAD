@@ -93,7 +93,7 @@ class Circle(Shape):
             self.radius = max(0.1, math.hypot(new_x - self.cx, new_y - self.cy))
     
     def to_dict(self) -> dict:
-        return {'type': 'circle', 'cx': self.cx, 'cy': self.cy, 'radius': self.radius,
+        return {'id': self.id, 'type': 'circle', 'cx': self.cx, 'cy': self.cy, 'radius': self.radius,
                 'color': self.color, 'line_style_name': self.line_style_name}
     
     @staticmethod
@@ -101,6 +101,7 @@ class Circle(Shape):
         circle = Circle(data['cx'], data['cy'], data['radius'])
         circle.color = data.get('color', circle.color)
         circle.line_style_name = data.get('line_style_name', circle.line_style_name)
+        circle.id = data.get('id', circle.id)
         return circle
     
     def __repr__(self) -> str:

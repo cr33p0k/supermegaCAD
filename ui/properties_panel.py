@@ -82,6 +82,8 @@ class PropertiesPanel:
                 self._build_polygon_props(shape)
             elif shape_type == 'Spline':
                 self._build_spline_props(shape)
+            elif shape_type in ('LinearDimension', 'RadialDimension', 'AngularDimension'):
+                self._build_dimension_props(shape)
             
             # Общие свойства (стиль линии)
             self._build_common_props(shape)
@@ -99,6 +101,9 @@ class PropertiesPanel:
             'Ellipse': 'Эллипс',
             'Polygon': 'Многоугольник',
             'Spline': 'Сплайн',
+            'LinearDimension': 'Линейный размер',
+            'RadialDimension': 'Радиальный размер',
+            'AngularDimension': 'Угловой размер',
         }
         return names.get(shape_type, shape_type)
     
@@ -346,6 +351,58 @@ class PropertiesPanel:
             ttk.Label(self.props_frame, text=f"Площадь: {area:.2f}").grid(
                 row=10, column=0, columnspan=2, sticky=tk.W, padx=2
             )
+            
+    def _create_string_field(self, label: str, attr: str, shape: Any, row: int) -> None:
+        """Создать текстовое поле ввода для атрибута"""
+        ttk.Label(self.props_frame, text=label).grid(
+            row=row, column=0, sticky=tk.W, padx=2, pady=2
+        )
+        
+        var = tk.StringVar(value=getattr(shape, attr, ""))
+        self._vars[attr] = var
+        
+        entry = ttk.Entry(self.props_frame, textvariable=var, width=12)
+        entry.grid(row=row, column=1, sticky=tk.EW, padx=2, pady=2)
+        self._widgets[attr] = entry
+        
+        def on_change(event=None):
+            if self._updating:
+                return
+            setattr(shape, attr, var.get())
+            self.app.redraw()
+            if event and event.keysym == 'Return':
+                self.app.canvas.focus_set()
+                
+        entry.bind('<Return>', on_change)
+        entry.bind('<FocusOut>', on_change)
+            
+    def _build_dimension_props(self, shape: Any) -> None:
+        """Свойства размера"""
+        self._create_string_field("Переопределение:", "text_override", shape, 0)
+        
+        ttk.Separator(self.props_frame, orient=tk.HORIZONTAL).grid(
+            row=1, column=0, columnspan=2, sticky=tk.EW, pady=6
+        )
+        
+        if type(shape).__name__ == "LinearDimension":
+            val = __import__('core').SegmentGeometry.calculate_length(shape.p1_x, shape.p1_y, shape.p2_x, shape.p2_y)
+            ttk.Label(self.props_frame, text=f"Фактическое: {val:.2f}").grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=2)
+            self._create_field("Отступ:", "offset", shape, 3)
+            
+        elif type(shape).__name__ == "RadialDimension":
+            val = shape.radius * 2 if shape.is_diameter else shape.radius
+            prefix = "Ø" if shape.is_diameter else "R"
+            ttk.Label(self.props_frame, text=f"Фактическое: {prefix}{val:.2f}").grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=2)
+            
+        elif type(shape).__name__ == "AngularDimension":
+            import math
+            angle1 = math.atan2(shape.p1_y - shape.cy, shape.p1_x - shape.cx)
+            angle2 = math.atan2(shape.p2_y - shape.cy, shape.p2_x - shape.cx)
+            diff = angle2 - angle1
+            val_deg = math.degrees(diff) if diff > 0 else math.degrees(diff + 2 * math.pi)
+            if val_deg > 180: val_deg = 360 - val_deg
+            ttk.Label(self.props_frame, text=f"Угол: {val_deg:.1f}°").grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=2)
+            self._create_field("Радиус дуги:", "radius", shape, 3, min_val=0.1)
     
     def _build_spline_props(self, shape: Any) -> None:
         """Свойства сплайна"""

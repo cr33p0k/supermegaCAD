@@ -130,7 +130,7 @@ class Polygon(Shape):
             self.rotation = math.degrees(math.atan2(new_y - self.cy, new_x - self.cx))
     
     def to_dict(self) -> dict:
-        return {'type': 'polygon', 'cx': self.cx, 'cy': self.cy, 'radius': self.radius,
+        return {'id': self.id, 'type': 'polygon', 'cx': self.cx, 'cy': self.cy, 'radius': self.radius,
                 'num_sides': self.num_sides, 'inscribed': self.inscribed, 'rotation': self.rotation,
                 'color': self.color, 'line_style_name': self.line_style_name}
     
@@ -140,6 +140,7 @@ class Polygon(Shape):
                        data.get('num_sides', 6), data.get('inscribed', True), data.get('rotation', 0))
         poly.color = data.get('color', poly.color)
         poly.line_style_name = data.get('line_style_name', poly.line_style_name)
+        poly.id = data.get('id', poly.id)
         return poly
     
     def __repr__(self) -> str:

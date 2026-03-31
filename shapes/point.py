@@ -59,7 +59,7 @@ class Point(Shape):
             self.x, self.y = new_x, new_y
             
     def to_dict(self) -> dict:
-        return {
+        return {'id': self.id, 
             'type': 'point', 
             'x': self.x, 
             'y': self.y,
@@ -72,6 +72,7 @@ class Point(Shape):
         p = Point(data['x'], data['y'])
         p.color = data.get('color', p.color)
         p.line_style_name = data.get('line_style_name', p.line_style_name)
+        p.id = data.get('id', p.id)
         return p
     
     def __repr__(self) -> str:

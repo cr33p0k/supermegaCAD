@@ -46,6 +46,13 @@ class ShapeManager:
         """Получить все фигуры"""
         return self._shapes.copy()
     
+    def get_shape_by_id(self, shape_id: str) -> Optional[Shape]:
+        """Получить фигуру по идентификатору"""
+        for shape in self._shapes:
+            if getattr(shape, 'id', None) == shape_id:
+                return shape
+        return None
+    
     def get_shape_count(self) -> int:
         """Получить количество фигур"""
         return len(self._shapes)
@@ -88,7 +95,7 @@ class ShapeManager:
     
     def import_from_list(self, shapes_data: List[dict]) -> None:
         """Импорт фигур из списка словарей"""
-        from shapes import Segment, Circle, Arc, Rectangle, Ellipse, Polygon, Spline, Point
+        from shapes import Segment, Circle, Arc, Rectangle, Ellipse, Polygon, Spline, Point, LinearDimension, RadialDimension, AngularDimension
         
         self.clear_all()
         
@@ -101,6 +108,9 @@ class ShapeManager:
             'polygon': Polygon.from_dict,
             'spline': Spline.from_dict,
             'point': Point.from_dict,
+            'linear_dimension': LinearDimension.from_dict,
+            'radial_dimension': RadialDimension.from_dict,
+            'angular_dimension': AngularDimension.from_dict,
         }
         
         for data in shapes_data:

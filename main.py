@@ -4,7 +4,7 @@ from tkinter import ttk, messagebox
 from core import CoordinateConverter, CanvasRenderer, UIBuilder
 from managers import ShapeManager, SnapManager, SnapType, GridManager
 from managers.line_style_manager import LineStyleManager
-from tools import DrawTool, SelectTool, PanTool, NavigationHandler, PrimitiveType, CreationMode, PRIMITIVE_NAMES, PRIMITIVE_MODES
+from tools import DrawTool, SelectTool, PanTool, NavigationHandler, DimensionTool, PrimitiveType, CreationMode, PRIMITIVE_NAMES, PRIMITIVE_MODES
 from shapes import Segment, Circle, Arc, Rectangle, Ellipse, Polygon, Spline
 from view_transform import ViewTransform
 from dialogs import StyleManagerDialog, ThemeDialog
@@ -40,6 +40,7 @@ class GeometryApp(tk.Tk):
         self.draw_tool = DrawTool(self)
         self.select_tool = SelectTool(self)
         self.pan_tool = PanTool(self)
+        self.dimension_tool = DimensionTool(self)
         
         self.current_tool = self.draw_tool
         self.tool_var = tk.StringVar(value="draw")
@@ -47,7 +48,8 @@ class GeometryApp(tk.Tk):
         self.tools = {
             "draw": (self.draw_tool, "Рисование"),
             "select": (self.select_tool, "Выделение"),
-            "pan": (self.pan_tool, "Панорамирование")
+            "pan": (self.pan_tool, "Панорамирование"),
+            "dimension": (self.dimension_tool, "Размеры")
         }
         
         # Переменные настроек
@@ -55,6 +57,7 @@ class GeometryApp(tk.Tk):
         self.current_style_var = tk.StringVar(value=self.style_manager.get_current_style_name())
         self.primitive_type_var = tk.StringVar(value="segment")
         self.creation_mode_var = tk.StringVar(value="default")
+        self.dimension_mode_var = tk.StringVar(value="linear")
         
         # Параметры примитивов
         self.polygon_sides_var = tk.IntVar(value=6)
@@ -118,6 +121,7 @@ class GeometryApp(tk.Tk):
         self.canvas = tk.Canvas(canvas_container, background="#0a0a0a", highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
         self.renderer = CanvasRenderer(self.canvas)
+        self.renderer.app = self
         self.renderer.style_manager = self.style_manager
         self.renderer.color_bg = "#0a0a0a"
         self.renderer.color_grid = "#1a1a1a"
@@ -141,6 +145,7 @@ class GeometryApp(tk.Tk):
             ("🖊 Рисование", "draw", "D"),
             ("👆 Выделение", "select", "S"),
             ("✋ Панорама", "pan", "H"),
+            ("📐 Размеры", "dimension", "M"),
         ]
         
         for text, value, hotkey in tools_data:
@@ -180,6 +185,11 @@ class GeometryApp(tk.Tk):
         
         self.modes_container = ttk.Frame(self.modes_frame)
         self.modes_container.pack(fill=tk.X)
+        
+        # === Типы размеров ===
+        self.dim_modes_frame = ttk.LabelFrame(panel, text="  Режим размеров  ", padding=8)
+        # Упаковываем динамически
+        
         self._update_creation_modes()
         
         # === Параметры примитива ===
@@ -333,9 +343,14 @@ class GeometryApp(tk.Tk):
         self.rect_params.pack_forget()
         self.empty_params.pack_forget()
         
+        self.empty_params.pack_forget()
+        
         ptype = self.draw_tool.primitive_type
         
-        if ptype == PrimitiveType.POLYGON:
+        if self.tool_var.get() == "dimension":
+            # Покажем режимы размеров вместо свойств примитивов
+            pass
+        elif ptype == PrimitiveType.POLYGON:
             self.polygon_params.pack(fill=tk.X)
         elif ptype == PrimitiveType.RECTANGLE:
             self.rect_params.pack(fill=tk.X)
@@ -435,6 +450,7 @@ class GeometryApp(tk.Tk):
   D - Рисование
   S - Выделение
   H - Панорама
+  M - Размеры
 
 ВИД:
   + / = - Увеличить
@@ -478,6 +494,25 @@ class GeometryApp(tk.Tk):
                 self.modes_container, text=label,
                 variable=self.creation_mode_var, value=mode.name,
                 command=lambda m=mode: self._set_creation_mode(m)
+            ).pack(anchor=tk.W, pady=1)
+            
+    def _update_dimension_modes(self) -> None:
+        """Обновить панель типов размеров"""
+        for widget in self.dim_modes_frame.winfo_children():
+            widget.destroy()
+            
+        dim_modes = [
+            ("linear", "Линейный"),
+            ("radius", "Радиус"),
+            ("diameter", "Диаметр"),
+            ("angular", "Угловой")
+        ]
+        
+        for mode, label in dim_modes:
+            ttk.Radiobutton(
+                self.dim_modes_frame, text=label,
+                variable=self.dimension_mode_var, value=mode,
+                command=lambda m=mode: self.dimension_tool.set_mode(m)
             ).pack(anchor=tk.W, pady=1)
     
     def _set_primitive_type(self, ptype: PrimitiveType) -> None:
@@ -589,6 +624,7 @@ class GeometryApp(tk.Tk):
             'd': lambda: self.set_tool("draw"),
             's': lambda: self.set_tool("select"),
             'h': lambda: self.set_tool("pan"),
+            'm': lambda: self.set_tool("dimension"),
             'equal': lambda: self.zoom_by_factor(1.2),
             'plus': lambda: self.zoom_by_factor(1.2),
             'minus': lambda: self.zoom_by_factor(0.8),
@@ -613,15 +649,31 @@ class GeometryApp(tk.Tk):
         self.tool_var.set(tool_name)
         
         # При переключении на рисование снимаем выделение
-        if tool_name == "draw":
+        if tool_name == "draw" or tool_name == "dimension":
             self.shape_manager.deselect_all()
             self.properties_panel.update_for_shape(None)
+            
+        # Обновление UI панелей
+        if tool_name == "dimension":
+            self.modes_frame.pack_forget()
+            self.prims_frame.pack_forget()
+            self.dim_modes_frame.pack(fill=tk.X, padx=6, pady=6, after=self.tools_frame)
+            self._update_dimension_modes()
+        elif tool_name == "draw":
+            self.dim_modes_frame.pack_forget()
+            self.prims_frame.pack(fill=tk.X, padx=6, pady=6, after=self.tools_frame)
+            self.modes_frame.pack(fill=tk.X, padx=6, pady=6, after=self.prims_frame)
+        else:
+            self.dim_modes_frame.pack_forget()
+        
+        self._update_params_visibility()
         
         # Обновляем подсказку
         hints = {
             "draw": "Кликните для указания точек",
             "select": "Кликните для выбора объекта",
-            "pan": "Зажмите ЛКМ для панорамирования"
+            "pan": "Зажмите ЛКМ для панорамирования",
+            "dimension": "Кликните для выбора точек/объектов"
         }
         self.hint_label.config(text=hints.get(tool_name, ""))
         

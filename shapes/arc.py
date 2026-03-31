@@ -279,7 +279,7 @@ class Arc(Shape):
             self.end_angle = math.degrees(math.atan2(new_y - self.cy, new_x - self.cx))
     
     def to_dict(self) -> dict:
-        return {'type': 'arc', 'cx': self.cx, 'cy': self.cy, 'radius': self.radius,
+        return {'id': self.id, 'type': 'arc', 'cx': self.cx, 'cy': self.cy, 'radius': self.radius,
                 'start_angle': self.start_angle, 'end_angle': self.end_angle,
                 'color': self.color, 'line_style_name': self.line_style_name}
     
@@ -288,6 +288,7 @@ class Arc(Shape):
         arc = Arc(data['cx'], data['cy'], data['radius'], data['start_angle'], data['end_angle'])
         arc.color = data.get('color', arc.color)
         arc.line_style_name = data.get('line_style_name', arc.line_style_name)
+        arc.id = data.get('id', arc.id)
         return arc
     
     def __repr__(self) -> str:

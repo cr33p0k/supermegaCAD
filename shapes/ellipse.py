@@ -130,7 +130,7 @@ class Ellipse(Shape):
             self.ry = math.hypot(new_x - self.cx, new_y - self.cy)
     
     def to_dict(self) -> dict:
-        return {'type': 'ellipse', 'cx': self.cx, 'cy': self.cy,
+        return {'id': self.id, 'type': 'ellipse', 'cx': self.cx, 'cy': self.cy,
                 'rx': self.rx, 'ry': self.ry, 'rotation': self.rotation,
                 'color': self.color, 'line_style_name': self.line_style_name}
     
@@ -139,6 +139,7 @@ class Ellipse(Shape):
         ellipse = Ellipse(data['cx'], data['cy'], data['rx'], data['ry'], data.get('rotation', 0))
         ellipse.color = data.get('color', ellipse.color)
         ellipse.line_style_name = data.get('line_style_name', ellipse.line_style_name)
+        ellipse.id = data.get('id', ellipse.id)
         return ellipse
     
     def __repr__(self) -> str:
