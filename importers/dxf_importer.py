@@ -28,7 +28,7 @@ class DxfImporter:
                     
             for entity in msp:
                 layer_name, style_name, color_hex = self._get_entity_style(entity, doc)
-                if layer_name == "Sheet_Border":
+                if layer_name.lower() in ("sheet_border", "defpoints"):
                     continue
                     
                 self._create_shape_from_entity(entity, layer_name, style_name, color_hex)
@@ -55,8 +55,6 @@ class DxfImporter:
         # 1. СЛОЙ
         raw_layer = entity.dxf.layer if entity.dxf.hasattr('layer') else '0'
         layer_name = self._decode_autocad_text(raw_layer)
-        if layer_name.lower() == 'defpoints':
-            layer_name = '0'
             
         # 2. ТИП ЛИНИИ -> СТИЛЬ
         dxf_linetype = entity.dxf.linetype if entity.dxf.hasattr('linetype') else 'ByLayer'
@@ -183,9 +181,26 @@ class DxfImporter:
             if not points:
                 return
                 
-            if len(points) > 20: 
-                s = Spline(points)
+            is_procedural = any(x in style_name.lower() for x in ['волнист', 'излом', 'wavy', 'broken'])
+            
+            # Оптимизация 1: Схлопываем процедурные линии (волнистая/с изломами) в единый отрезок
+            if is_procedural and len(points) > 2:
+                s = Segment(points[0][0], points[0][1], points[-1][0], points[-1][1])
+                # Мы не меняем стиль на 'Сплошная основная', а оставляем волнистым!
+                # Сам shape.line_style_name устанавливается ниже для всех.
                 shapes_to_add.append(s)
+            
+            elif len(points) > 20:
+                # Оптимизация 2: Децимация обычных сплайнов/тяжелых полилиний
+                # Берем каждую N-ую точку, чтобы не перегружать рендерер
+                step = max(1, len(points) // 20)  # максимум ~20 опорных точек
+                decimated = points[::step]
+                if decimated[-1] != points[-1]:
+                    decimated.append(points[-1])
+                    
+                s = Spline(decimated)
+                shapes_to_add.append(s)
+                
             elif len(points) > 2 and math.hypot(points[0][0]-points[-1][0], points[0][1]-points[-1][1]) < 1e-5:
                 # Замкнутый полигон
                 for i in range(len(points) - 1):
@@ -210,19 +225,32 @@ class DxfImporter:
                 pts = [(p[0], p[1]) for p in entity.fit_points]
                 
             if pts:
-                s = Spline(pts)
-                shapes_to_add.append(s)
+                is_procedural = any(x in style_name.lower() for x in ['волнист', 'излом', 'wavy', 'broken'])
+                
+                if is_procedural and len(pts) > 2:
+                    s = Segment(pts[0][0], pts[0][1], pts[-1][0], pts[-1][1])
+                    shapes_to_add.append(s)
+                else:
+                    if len(pts) > 20:
+                        step = max(1, len(pts) // 20)
+                        decimated = pts[::step]
+                        if decimated[-1] != pts[-1]:
+                            decimated.append(pts[-1])
+                        pts = decimated
+                        
+                    s = Spline(pts)
+                    shapes_to_add.append(s)
                 
         # Настраиваем свойства для всех сгенерированных фигур
         for shape in shapes_to_add:
             shape.color = color_hex
             
-            # Защита: если пришла взорванная в LWPOLYLINE процедурная линия, мы ставим ей сплошной стиль
-            is_procedural = any(x in style_name.lower() for x in ['волнист', 'излом', 'wavy', 'broken'])
-            if is_procedural and etype in ('LWPOLYLINE', 'SPLINE'):
-                shape.line_style_name = 'Сплошная основная'
-            else:
-                shape.line_style_name = style_name
-                
+            # Раньше мы сбрасывали стиль на основную линию:
+            # is_procedural = any(x in style_name.lower() for x in ['волнист', 'излом', 'wavy', 'broken'])
+            # if is_procedural and etype in ('LWPOLYLINE', 'SPLINE'):
+            #     shape.line_style_name = 'Сплошная основная'
+            
+            # Теперь мы оставляем честный стиль, так как схлопнули точки в 1 отрезок!
+            shape.line_style_name = style_name
             shape.layer_name = layer_name
             self.shapes.append(shape)

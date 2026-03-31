@@ -741,9 +741,9 @@ class GeometryApp(tk.Tk):
             
         # Ask for margin
         from tkinter import simpledialog
-        margin = simpledialog.askfloat("Экспорт", "Отступ (мм):", initialvalue=20.0, minvalue=0.0)
+        margin = simpledialog.askfloat("Экспорт", "Отступ (мм):", initialvalue=40.0, minvalue=0.0)
         if margin is None:
-            margin = 20.0 # Default if cancelled, or return? Let's default.
+            margin = 40.0 # Default if cancelled, or return? Let's default.
             
         try:
             from exporters.dxf_exporter import DxfExporter

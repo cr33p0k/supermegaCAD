@@ -29,7 +29,7 @@ class DxfExporter:
         self.f: Optional[IO] = None
         self.ext_min = (0.0, 0.0)
         self.ext_max = (100.0, 100.0)
-        self.margin = 20.0
+        self.margin = 40.0
         
         # Хранение важных handles
         self.handles = {
@@ -57,7 +57,7 @@ class DxfExporter:
         self.handle_seed += 1
         return h
 
-    def export(self, filename: str, shapes: List[Any], styles: List[Any], margin: float = 20.0) -> None:
+    def export(self, filename: str, shapes: List[Any], styles: List[Any], margin: float = 40.0) -> None:
         """
         Экспорт списка фигур в DXF файл
         """
@@ -323,6 +323,20 @@ class DxfExporter:
         self._write_pair(6, "Continuous")
         self._write_pair(390, "F")
         
+        # Слой Defpoints для невидимых точек границ (отступов)
+        h = self._next_handle()
+        self._write_pair(0, "LAYER")
+        self._write_pair(5, h)
+        self._write_pair(330, self.handles["LAYER_TABLE"])
+        self._write_pair(100, "AcDbSymbolTableRecord")
+        self._write_pair(100, "AcDbLayerTableRecord")
+        self._write_pair(2, "Defpoints")
+        self._write_pair(70, 0)
+        self._write_pair(62, 8) # Серый цвет
+        self._write_pair(6, "Continuous")
+        self._write_pair(290, 0) # Флаг: не печатать (Plot=False)
+        self._write_pair(390, "F")
+        
         for style in self.styles:
             safe_name = self._sanitize_name(style.name)
             if safe_name == "0": continue
@@ -500,8 +514,27 @@ class DxfExporter:
             except Exception as e:
                 print(f"Error exporting shape {shape}: {e}")
                 
+        # --- ФОРСИРУЕМ ОТСТУПЫ (MARGIN) ---
+        # T-FLEX часто определяет границы чертежа исключительно по геометрии, 
+        # игнорируя $LIMMIN / $EXTMIN. Чтобы задать реальный отступ,
+        # поставим две POINT в противоположных углах margin-области 
+        # на непечатаемом слое Defpoints.
+        self._write_margin_points()
                 
         self._write_pair(0, "ENDSEC")
+
+    def _write_margin_points(self):
+        """Отрисовка невидимых точек для принудительного расширения границ в CAD"""
+        for pt in [self.ext_min, self.ext_max]:
+            self._write_pair(0, "POINT")
+            self._write_pair(5, self._next_handle())
+            self._write_pair(330, self.handles["T_MODEL_SPACE"])
+            self._write_pair(100, "AcDbEntity")
+            self._write_pair(8, "Defpoints") # Непечатаемый слой AutoCAD
+            self._write_pair(100, "AcDbPoint")
+            self._write_pair(10, pt[0])
+            self._write_pair(20, pt[1])
+            self._write_pair(30, 0.0)
 
     def _write_objects(self):
         self._write_pair(0, "SECTION")
@@ -573,11 +606,12 @@ class DxfExporter:
             # Масштаб типа линии, чтобы волны/штрихи не были огромными
             ltscale = 1.0
             if style.line_type == 'wavy':
-                # Для T-FLEX масштаб типа линии напрямую влияет на плотность волн
-                # Уменьшаем масштаб, чтобы волн было больше
-                ltscale = max(0.01, style.wave_length / 100.0)
+                # Для T-FLEX масштаб типа линии напрямую влияет на плотность и амплитуду волн
+                # Уменьшаем масштаб в 10 раз по сравнению с предыдущим, чтобы волны были меньше
+                # и не вылезали за страницы и границы bounding box-а
+                ltscale = max(0.001, style.wave_length / 1000.0)
             elif style.line_type == 'broken':
-                ltscale = max(0.01, style.break_width / 100.0)
+                ltscale = max(0.001, style.break_width / 500.0)
             elif style.line_type in ('dashed', 'dashdot', 'dashdotdot'):
                 ltscale = max(0.01, style.dash_length / 10.0)
                 
