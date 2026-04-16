@@ -43,23 +43,24 @@ class Polygon(Shape):
         return 2 * self.get_effective_radius() * math.sin(math.pi / self.num_sides)
     
     def draw(self, renderer, width: int, height: int, view_transform, point_radius: int = 4) -> None:
-        line_width = 3
-        dash_pattern = None
-        
-        if hasattr(renderer, 'style_manager') and renderer.style_manager:
-            style = renderer.style_manager.get_style(self.line_style_name)
-            if style:
-                line_width = renderer.style_manager.mm_to_pixels(style.thickness_mm)
-                dash_pattern = style.get_dash_pattern()
+        line_width, dash_pattern, line_type, style = self._get_style_draw_params(renderer)
         
         color = "#55ff55" if self.selected else self.color
         if self.selected:
             line_width += 1
         
         vertices = [view_transform.world_to_screen(v[0], v[1], width, height) for v in self.get_vertices()]
-        
-        points = [coord for v in vertices for coord in v] + list(vertices[0])
-        renderer.canvas.create_line(*points, fill=color, width=line_width, dash=dash_pattern, tags="shape")
+        self._draw_styled_screen_path(
+            renderer,
+            vertices,
+            color,
+            line_width,
+            dash_pattern,
+            line_type,
+            style,
+            closed=True,
+            smooth=False
+        )
         
         for sx, sy in vertices:
             renderer.canvas.create_oval(sx - point_radius, sy - point_radius,

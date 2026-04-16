@@ -169,31 +169,28 @@ class Arc(Shape):
         return points
     
     def draw(self, renderer, width: int, height: int, view_transform, point_radius: int = 4) -> None:
-        line_width = 3
-        dash_pattern = None
-        
-        if hasattr(renderer, 'style_manager') and renderer.style_manager:
-            style = renderer.style_manager.get_style(self.line_style_name)
-            if style:
-                line_width = renderer.style_manager.mm_to_pixels(style.thickness_mm)
-                dash_pattern = style.get_dash_pattern()
+        line_width, dash_pattern, line_type, style = self._get_style_draw_params(renderer)
         
         color = "#55ff55" if self.selected else self.color
         if self.selected:
             line_width += 1
         
         arc_points = self.get_arc_points(48)
-        screen_points = []
-        for px, py in arc_points:
-            sx, sy = view_transform.world_to_screen(px, py, width, height)
-            screen_points.extend([sx, sy])
-        
-        if len(screen_points) >= 4:
-            renderer.canvas.create_line(
-                *screen_points,
-                fill=color, width=line_width, dash=dash_pattern,
-                smooth=True, tags="shape"
-            )
+        screen_points = [
+            view_transform.world_to_screen(px, py, width, height)
+            for px, py in arc_points
+        ]
+        self._draw_styled_screen_path(
+            renderer,
+            screen_points,
+            color,
+            line_width,
+            dash_pattern,
+            line_type,
+            style,
+            closed=False,
+            smooth=True
+        )
         
         # Концевые точки
         for pt in [self.get_start_point(), self.get_end_point()]:

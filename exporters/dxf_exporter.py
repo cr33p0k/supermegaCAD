@@ -5,6 +5,7 @@ import math
 from typing import List, Any, Dict, Optional, IO
 from datetime import datetime
 
+from managers.line_style_manager import LineStyleManager
 
 # Маппинг внутренних типов линий на стандартные DXF-имена,
 # которые T-FLEX, AutoCAD и NanoCAD знают нативно
@@ -30,6 +31,7 @@ class DxfExporter:
         self.ext_min = (0.0, 0.0)
         self.ext_max = (100.0, 100.0)
         self.margin = 40.0
+        self._style_geometry_helper = LineStyleManager()
         
         # Хранение важных handles
         self.handles = {
@@ -87,7 +89,7 @@ class DxfExporter:
                 max_x = max(b[2] for b in bounds_list)
                 max_y = max(b[3] for b in bounds_list)
             except Exception:
-                pass # Default bounds if error
+                pass 
                 
         # Apply margin
         self.ext_min = (min_x - margin, min_y - margin)
@@ -133,13 +135,19 @@ class DxfExporter:
         self._write_pair(2, "HEADER")
         
         self._write_pair(9, "$ACADVER")
-        self._write_pair(1, "AC1015")
+        self._write_pair(1, "AC1018")
         
         self._write_pair(9, "$DWGCODEPAGE")
         self._write_pair(3, "ANSI_1251")
         
         self._write_pair(9, "$INSUNITS")
         self._write_pair(70, 4) 
+
+        self._write_pair(9, "$MEASUREMENT")
+        self._write_pair(70, 1)
+
+        self._write_pair(9, "$LWDISPLAY")
+        self._write_pair(290, 1)
         
         self._write_pair(9, "$HANDSEED")
         self._write_pair(5, "FFFF") 
@@ -190,7 +198,7 @@ class DxfExporter:
         self._write_table_ucs()
         self._write_table_appid()
         self._write_table_dimstyle()
-        self._write_table_block_record() # Mandatory
+        self._write_table_block_record() 
         
         self._write_pair(0, "ENDSEC")
         
@@ -205,7 +213,7 @@ class DxfExporter:
     def _write_table_vport(self):
         self._write_table_head("VPORT", self.handles["VPORT_TABLE"])
         
-        # Active VPORT *Active
+        
         h = self._next_handle()
         self._write_pair(0, "VPORT")
         self._write_pair(5, h)
@@ -215,7 +223,6 @@ class DxfExporter:
         self._write_pair(2, "*Active")
         self._write_pair(70, 0)
         
-        # Center point (view center)
         cx = (self.ext_min[0] + self.ext_max[0]) / 2.0
         cy = (self.ext_min[1] + self.ext_max[1]) / 2.0
         self._write_pair(10, cx)
@@ -226,7 +233,6 @@ class DxfExporter:
         self._write_pair(12, 0.0) 
         self._write_pair(22, 0.0)
         
-        # View Height
         height = self.ext_max[1] - self.ext_min[1]
         self._write_pair(40, height if height > 0 else 100.0) 
         
@@ -580,7 +586,23 @@ class DxfExporter:
             return (r << 16) | (g << 8) | b
         return 0
 
-    def _write_common_entity_props(self, entity_type: str, shape: Any, force_layer: Optional[str] = None):
+    def _get_lineweight(self, style: Any) -> int:
+        """Получить ближайшую стандартную DXF-толщину линии."""
+        valid_weights = [0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200, 211]
+        if style is None:
+            return 25
+        target_weight = max(0, int(round(getattr(style, 'thickness_mm', 0.25) * 100.0)))
+        return min(valid_weights, key=lambda value: abs(value - target_weight))
+
+    def _write_common_entity_props(
+        self,
+        entity_type: str,
+        shape: Any,
+        force_layer: Optional[str] = None,
+        force_linetype: Optional[str] = None,
+        force_ltscale: Optional[float] = None,
+        subclasses: Optional[List[str]] = None
+    ) -> None:
         """Запись общих свойств примитива"""
         self._write_pair(0, entity_type)
         self._write_pair(5, self._next_handle())
@@ -591,7 +613,11 @@ class DxfExporter:
         self._write_pair(100, "AcDbEntity")
         
         # Слой
-        layer = force_layer if force_layer is not None else self._sanitize_name(shape.line_style_name)
+        if force_layer is not None:
+            layer = force_layer
+        else:
+            raw_layer = getattr(shape, 'layer', None) or getattr(shape, 'line_style_name', None)
+            layer = self._sanitize_name(raw_layer) if raw_layer else "0"
         self._write_pair(8, layer or "0")
         
         # Цвет (TrueColor через код 420)
@@ -600,27 +626,35 @@ class DxfExporter:
         # Тип линии — напрямую из стиля фигуры
         style = self._get_shape_style(shape)
         if style:
-            dxf_ltype = self._get_dxf_linetype(style)
+            dxf_ltype = force_linetype if force_linetype is not None else self._get_dxf_linetype(style)
             self._write_pair(6, dxf_ltype)
+            self._write_pair(370, self._get_lineweight(style))
             
             # Масштаб типа линии, чтобы волны/штрихи не были огромными
-            ltscale = 1.0
-            if style.line_type == 'wavy':
-                # Для T-FLEX масштаб типа линии напрямую влияет на плотность и амплитуду волн
-                # Уменьшаем масштаб в 10 раз по сравнению с предыдущим, чтобы волны были меньше
-                # и не вылезали за страницы и границы bounding box-а
-                ltscale = max(0.001, style.wave_length / 1000.0)
-            elif style.line_type == 'broken':
-                ltscale = max(0.001, style.break_width / 500.0)
-            elif style.line_type in ('dashed', 'dashdot', 'dashdotdot'):
-                ltscale = max(0.01, style.dash_length / 10.0)
+            if force_ltscale is not None:
+                ltscale = force_ltscale
+            else:
+                ltscale = 1.0
+                if style.line_type == 'wavy':
+                    # Для T-FLEX масштаб типа линии напрямую влияет на плотность и амплитуду волн
+                    # Уменьшаем масштаб, чтобы волны были меньше и не выходили за границы листа
+                    ltscale = max(0.001, style.wave_length / 1000.0)
+                elif style.line_type == 'broken':
+                    ltscale = 1.0
+                elif style.line_type in ('dashed', 'dashdot', 'dashdotdot'):
+                    ltscale = max(0.01, style.dash_length / 10.0)
                 
             self._write_pair(48, ltscale)
         else:
-            self._write_pair(6, "Continuous")
-            self._write_pair(48, 1.0)
+            self._write_pair(6, force_linetype if force_linetype is not None else "Continuous")
+            self._write_pair(370, 25)
+            self._write_pair(48, force_ltscale if force_ltscale is not None else 1.0)
         
-        self._write_pair(100, f"AcDb{entity_type.title().replace('Lwpolyline', 'Polyline')}")
+        if subclasses:
+            for subclass in subclasses:
+                self._write_pair(100, subclass)
+        else:
+            self._write_pair(100, f"AcDb{entity_type.title().replace('Lwpolyline', 'Polyline')}")
 
     def _get_shape_style(self, shape: Any):
         """Найти стиль фигуры в списке стилей"""
@@ -630,9 +664,18 @@ class DxfExporter:
         stype = shape.to_dict().get('type')
         if stype == 'point': self._write_point(shape)
         elif stype == 'segment': self._write_line(shape)
-        elif stype == 'circle': self._write_circle(shape)
-        elif stype == 'arc': self._write_arc(shape)
-        elif stype == 'ellipse': self._write_ellipse(shape)
+        elif stype == 'circle':
+            style = self._get_shape_style(shape)
+            if style and style.line_type in ('wavy', 'broken'):
+                self._write_circle_as_polyline(shape, style)
+            else:
+                self._write_circle(shape)
+        elif stype == 'arc':
+            style = self._get_shape_style(shape)
+            self._write_arc_as_polyline(shape, style)
+        elif stype == 'ellipse':
+            style = self._get_shape_style(shape)
+            self._write_ellipse_as_polyline(shape, style)
         elif stype == 'rectangle': self._write_lwpolyline_rect(shape)
         elif stype == 'polygon': self._write_lwpolyline_poly(shape)
         elif stype == 'spline': self._write_spline(shape)
@@ -660,13 +703,134 @@ class DxfExporter:
         self._write_pair(40, shape.radius)
 
     def _write_arc(self, shape):
-        self._write_common_entity_props("ARC", shape)
+        self._write_common_entity_props("ARC", shape, subclasses=["AcDbCircle", "AcDbArc"])
+        extent = shape._get_extent()
+        if extent >= 0:
+            start_angle = shape._normalize_angle(shape.start_angle)
+            end_angle = shape._normalize_angle(shape.start_angle + extent)
+        else:
+            # DXF ARC задается против часовой стрелки.
+            # Для наших CW-дуг экспортируем геометрически эквивалентную CCW-дугу
+            # с переставленными концами.
+            start_angle = shape._normalize_angle(shape.end_angle)
+            end_angle = shape._normalize_angle(shape.start_angle)
+
         self._write_pair(10, shape.cx)
         self._write_pair(20, shape.cy)
         self._write_pair(30, 0.0)
         self._write_pair(40, shape.radius)
-        self._write_pair(50, shape.start_angle)
-        self._write_pair(51, shape.end_angle)
+        self._write_pair(50, start_angle)
+        self._write_pair(51, end_angle)
+
+    def _write_polyline_points(
+        self,
+        shape: Any,
+        points: List[Any],
+        closed: bool,
+        force_linetype: Optional[str] = None,
+        force_ltscale: Optional[float] = None
+    ) -> None:
+        """Записать список мировых точек как LWPOLYLINE."""
+        poly_points = list(points)
+        if closed and len(poly_points) > 1 and poly_points[0] == poly_points[-1]:
+            poly_points = poly_points[:-1]
+
+        self._write_common_entity_props(
+            "LWPOLYLINE",
+            shape,
+            force_linetype=force_linetype,
+            force_ltscale=force_ltscale
+        )
+        self._write_pair(90, len(poly_points))
+        self._write_pair(70, 1 if closed else 0)
+        for px, py in poly_points:
+            self._write_pair(10, px)
+            self._write_pair(20, py)
+
+    def _build_circle_points(self, shape: Any, segments: int = 128) -> List[Any]:
+        """Аппроксимировать окружность мировыми точками."""
+        points = []
+        for i in range(segments):
+            angle = 2.0 * math.pi * i / segments
+            points.append((
+                shape.cx + shape.radius * math.cos(angle),
+                shape.cy + shape.radius * math.sin(angle)
+            ))
+        return points
+
+    def _build_ellipse_points(self, shape: Any, segments: int = 360) -> List[Any]:
+        """Аппроксимировать эллипс мировыми точками."""
+        points = []
+        for i in range(segments):
+            angle = i * 360.0 / segments
+            points.append(shape.get_point_on_ellipse(angle))
+        return points
+
+    def _apply_procedural_style_to_points(self, points: List[Any], style: Any, closed: bool) -> List[Any]:
+        """Преобразовать опорные точки контура в геометрию волнистой/ломаной линии."""
+        if style is None:
+            return points
+
+        if style.line_type == 'wavy':
+            return self._style_geometry_helper.generate_wavy_path_points(
+                points,
+                style.wave_amplitude,
+                style.wave_length,
+                closed=closed
+            )
+        if style.line_type == 'broken':
+            return self._style_geometry_helper.generate_broken_path_points(
+                points,
+                getattr(style, 'break_height', 12.0),
+                getattr(style, 'break_width', 10.0),
+                getattr(style, 'break_count', 1),
+                closed=closed
+            )
+        return points
+
+    def _write_circle_as_polyline(self, shape: Any, style: Any) -> None:
+        """Экспорт окружности со сложным стилем как геометрии, совместимой с T-FLEX."""
+        points = self._build_circle_points(shape)
+        points = self._apply_procedural_style_to_points(points, style, closed=True)
+        self._write_polyline_points(shape, points, closed=True, force_linetype="Continuous", force_ltscale=1.0)
+
+    def _write_arc_as_polyline(self, shape: Any, style: Any) -> None:
+        """Экспорт дуги со сложным стилем как геометрии, совместимой с T-FLEX."""
+        points = shape.get_arc_points(96)
+        if style and style.line_type in ('wavy', 'broken'):
+            points = self._apply_procedural_style_to_points(points, style, closed=False)
+            force_linetype = "Continuous"
+            force_ltscale = 1.0
+        else:
+            force_linetype = None
+            force_ltscale = 1.0
+        self._write_polyline_points(
+            shape,
+            points,
+            closed=False,
+            force_linetype=force_linetype,
+            force_ltscale=force_ltscale
+        )
+
+    def _write_ellipse_as_polyline(self, shape: Any, style: Any) -> None:
+        """Экспорт эллипса как плотной полилинии для устойчивого импорта в T-FLEX."""
+        points = self._build_ellipse_points(shape)
+
+        if style and style.line_type in ('wavy', 'broken'):
+            points = self._apply_procedural_style_to_points(points, style, closed=True)
+            force_linetype = "Continuous"
+            force_ltscale = 1.0
+        else:
+            force_linetype = None
+            force_ltscale = 1.0
+
+        self._write_polyline_points(
+            shape,
+            points,
+            closed=True,
+            force_linetype=force_linetype,
+            force_ltscale=force_ltscale
+        )
 
     def _write_ellipse(self, shape):
         self._write_common_entity_props("ELLIPSE", shape)
@@ -674,15 +838,26 @@ class DxfExporter:
         self._write_pair(20, shape.cy)
         self._write_pair(30, 0.0)
         
-        rad = math.radians(shape.rotation)
-        dx = shape.rx * math.cos(rad)
-        dy = shape.rx * math.sin(rad)
+        major_radius = shape.rx
+        minor_radius = shape.ry
+        major_angle = shape.rotation
+
+        # В DXF группа 11/21 задает вектор БОЛЬШОЙ полуоси,
+        # а ratio (40) должен быть в диапазоне (0, 1].
+        if shape.ry > shape.rx:
+            major_radius = shape.ry
+            minor_radius = shape.rx
+            major_angle = shape.rotation + 90.0
+
+        rad = math.radians(major_angle)
+        dx = major_radius * math.cos(rad)
+        dy = major_radius * math.sin(rad)
         
         self._write_pair(11, dx)
         self._write_pair(21, dy)
         self._write_pair(31, 0.0)
         
-        ratio = shape.ry / shape.rx if shape.rx != 0 else 1.0
+        ratio = minor_radius / major_radius if major_radius != 0 else 1.0
         self._write_pair(40, ratio)
         self._write_pair(41, 0.0)
         self._write_pair(42, 6.28318530718)
@@ -725,7 +900,13 @@ class DxfExporter:
 
     def _write_spline(self, shape):
         self._write_common_entity_props("SPLINE", shape)
-        pts = shape.points
+        fit_pts = shape.get_curve_points(12)
+        if len(fit_pts) < 2:
+            fit_pts = list(shape.points)
+
+        if len(fit_pts) < 2:
+            return
+
         degree = 3
         
         self._write_pair(210, 0.0)
@@ -733,15 +914,15 @@ class DxfExporter:
         self._write_pair(230, 1.0)
         self._write_pair(70, 8)
         self._write_pair(71, degree)
-        self._write_pair(72, len(pts))
-        self._write_pair(73, len(pts))
-        self._write_pair(74, 0)
-        
-        num_knots = len(pts) + degree + 1
+        self._write_pair(72, 0)
+        self._write_pair(73, 0)
+        self._write_pair(74, len(fit_pts))
+
+        num_knots = len(fit_pts) + degree + 1
         for i in range(num_knots):
             self._write_pair(40, float(i))
-             
-        for px, py in pts:
-            self._write_pair(10, px)
-            self._write_pair(20, py)
-            self._write_pair(30, 0.0)
+
+        for px, py in fit_pts:
+            self._write_pair(11, px)
+            self._write_pair(21, py)
+            self._write_pair(31, 0.0)

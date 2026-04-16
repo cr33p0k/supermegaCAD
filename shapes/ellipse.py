@@ -42,14 +42,7 @@ class Ellipse(Shape):
                 (self.cx + self.ry * sin_r, self.cy - self.ry * cos_r))
     
     def draw(self, renderer, width: int, height: int, view_transform, point_radius: int = 4) -> None:
-        line_width = 3
-        dash_pattern = None
-        
-        if hasattr(renderer, 'style_manager') and renderer.style_manager:
-            style = renderer.style_manager.get_style(self.line_style_name)
-            if style:
-                line_width = renderer.style_manager.mm_to_pixels(style.thickness_mm)
-                dash_pattern = style.get_dash_pattern()
+        line_width, dash_pattern, line_type, style = self._get_style_draw_params(renderer)
         
         color = "#55ff55" if self.selected else self.color
         if self.selected:
@@ -59,12 +52,19 @@ class Ellipse(Shape):
         points = []
         for i in range(64):
             wx, wy = self.get_point_on_ellipse(i * 360 / 64)
-            sx, sy = view_transform.world_to_screen(wx, wy, width, height)
-            points.extend([sx, sy])
-        points.extend(points[:2])
-        
-        renderer.canvas.create_line(*points, fill=color, width=line_width,
-                                    dash=dash_pattern, smooth=True, tags="shape")
+            points.append(view_transform.world_to_screen(wx, wy, width, height))
+
+        self._draw_styled_screen_path(
+            renderer,
+            points,
+            color,
+            line_width,
+            dash_pattern,
+            line_type,
+            style,
+            closed=True,
+            smooth=True
+        )
         
         # Центр и концы осей
         scx, scy = view_transform.world_to_screen(self.cx, self.cy, width, height)

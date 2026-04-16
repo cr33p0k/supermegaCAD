@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 import math
 
+DIMENSION_STYLE_NAME = "Размерная"
+
 
 @dataclass
 class LineStyle:
@@ -11,6 +13,7 @@ class LineStyle:
     line_type: str  # 'solid', 'dashed', 'dashdot', 'dashdotdot', 'wavy', 'broken'
     description: str = ""
     is_standard: bool = False  # Стандартный стиль нельзя удалить
+    is_dimension_style: bool = False  # Отдельный стиль только для размеров
     
     # Параметры для штриховых линий (в относительных единицах)
     dash_length: float = 4.0  # Длина штриха
@@ -77,6 +80,15 @@ class LineStyleManager:
             line_type='solid',
             description="Размерные и выносные линии",
             is_standard=True
+        ))
+
+        self.add_style(LineStyle(
+            name=DIMENSION_STYLE_NAME,
+            thickness_mm=self.THICKNESS_THIN,
+            line_type='solid',
+            description="Отдельный стиль для размерных, выносных линий и полок",
+            is_standard=True,
+            is_dimension_style=True
         ))
         
         # 3. Сплошная волнистая (0.4 мм)
@@ -166,6 +178,17 @@ class LineStyleManager:
     def get_style_names(self) -> List[str]:
         """Получить список имен стилей"""
         return list(self._styles.keys())
+
+    def get_general_style_names(self) -> List[str]:
+        """Получить стили, доступные для обычных примитивов"""
+        return [
+            name for name, style in self._styles.items()
+            if not style.is_dimension_style
+        ]
+
+    def get_dimension_style_name(self) -> str:
+        """Получить имя специального стиля размеров"""
+        return DIMENSION_STYLE_NAME
     
     def get_standard_style_names(self) -> List[str]:
         """Получить список имен стандартных стилей"""
@@ -282,6 +305,176 @@ class LineStyleManager:
         points.append((x2, y2))
         
         return points
+
+    def _get_polyline_length(self, points: List[Tuple[float, float]], closed: bool = False) -> float:
+        """Получить длину полилинии."""
+        if len(points) < 2:
+            return 0.0
+
+        total = 0.0
+        segment_count = len(points) if closed else len(points) - 1
+        for i in range(segment_count):
+            x1, y1 = points[i]
+            x2, y2 = points[(i + 1) % len(points)]
+            total += math.hypot(x2 - x1, y2 - y1)
+        return total
+
+    def _sample_polyline(
+        self,
+        points: List[Tuple[float, float]],
+        distance: float,
+        closed: bool = False
+    ) -> Tuple[float, float, float, float]:
+        """Получить точку и касательную на полилинии на заданном расстоянии."""
+        if len(points) < 2:
+            x, y = points[0] if points else (0.0, 0.0)
+            return x, y, 1.0, 0.0
+
+        total_length = self._get_polyline_length(points, closed)
+        if total_length <= 1e-9:
+            x, y = points[0]
+            return x, y, 1.0, 0.0
+
+        if closed:
+            distance = distance % total_length
+        else:
+            distance = max(0.0, min(distance, total_length))
+
+        walked = 0.0
+        segment_count = len(points) if closed else len(points) - 1
+        fallback_tangent = (1.0, 0.0)
+
+        for i in range(segment_count):
+            x1, y1 = points[i]
+            x2, y2 = points[(i + 1) % len(points)]
+            dx = x2 - x1
+            dy = y2 - y1
+            segment_length = math.hypot(dx, dy)
+            if segment_length <= 1e-9:
+                continue
+
+            tangent = (dx / segment_length, dy / segment_length)
+            fallback_tangent = tangent
+            next_walked = walked + segment_length
+
+            if distance <= next_walked or i == segment_count - 1:
+                local_distance = distance - walked
+                t = 0.0 if segment_length <= 1e-9 else local_distance / segment_length
+                t = max(0.0, min(t, 1.0))
+                return (
+                    x1 + dx * t,
+                    y1 + dy * t,
+                    tangent[0],
+                    tangent[1]
+                )
+
+            walked = next_walked
+
+        x, y = points[-1]
+        return x, y, fallback_tangent[0], fallback_tangent[1]
+
+    def generate_wavy_path_points(
+        self,
+        points: List[Tuple[float, float]],
+        amplitude: float,
+        wavelength: float,
+        closed: bool = False
+    ) -> List[Tuple[float, float]]:
+        """Построить волнистый контур вдоль произвольной полилинии."""
+        if len(points) < 2 or wavelength <= 0:
+            return list(points)
+
+        total_length = self._get_polyline_length(points, closed)
+        if total_length <= 1e-9:
+            return list(points)
+
+        sample_step = max(1.0, wavelength / 4.0)
+        sample_count = max(8, int(total_length / sample_step))
+        result = []
+        limit = sample_count if closed else sample_count + 1
+
+        for i in range(limit):
+            distance = total_length * i / sample_count
+            x, y, tx, ty = self._sample_polyline(points, distance, closed)
+            normal_x = -ty
+            normal_y = tx
+            offset = amplitude * math.sin(2.0 * math.pi * distance / wavelength)
+            result.append((x + normal_x * offset, y + normal_y * offset))
+
+        if closed and result:
+            result.append(result[0])
+
+        return result
+
+    def generate_broken_path_points(
+        self,
+        points: List[Tuple[float, float]],
+        break_height: float = 12.0,
+        break_width: float = 10.0,
+        break_count: int = 1,
+        closed: bool = False
+    ) -> List[Tuple[float, float]]:
+        """Построить контур с изломами вдоль произвольной полилинии."""
+        if len(points) < 2:
+            return list(points)
+
+        total_length = self._get_polyline_length(points, closed)
+        if total_length <= 1e-9:
+            return list(points)
+
+        centers = []
+        if closed:
+            pattern_span = max(break_width * 6.0, 24.0)
+            closed_break_count = max(3, int(total_length / pattern_span))
+            spacing = total_length / closed_break_count
+            centers = [spacing * (i + 0.5) for i in range(closed_break_count)]
+        else:
+            break_count = max(1, int(break_count))
+            if break_count == 1:
+                centers = [total_length / 2.0]
+            else:
+                margin = break_width * 2.0
+                usable_length = total_length - 2.0 * margin
+                if usable_length <= 0:
+                    return list(points)
+                spacing = usable_length / (break_count + 1)
+                centers = [margin + spacing * (i + 1) for i in range(break_count)]
+
+        sample_step = max(6.0, break_width)
+        distances = []
+        current = 0.0
+        limit = total_length if not closed else total_length - 1e-6
+        while current < limit:
+            distances.append(current)
+            current += sample_step
+        if not closed:
+            distances.append(total_length)
+
+        offsets: Dict[float, float] = {}
+        for center in centers:
+            d1 = max(0.0, center - break_width)
+            d2 = max(0.0, center - break_width / 3.0)
+            d3 = min(total_length, center + break_width / 3.0)
+            d4 = min(total_length, center + break_width)
+            distances.extend([d1, d2, d3, d4])
+            offsets[round(d2, 5)] = break_height
+            offsets[round(d3, 5)] = -break_height
+
+        ordered_distances = sorted(set(round(distance, 5) for distance in distances))
+        result = []
+
+        for distance_key in ordered_distances:
+            distance = float(distance_key)
+            x, y, tx, ty = self._sample_polyline(points, distance, closed)
+            normal_x = -ty
+            normal_y = tx
+            offset = offsets.get(distance_key, 0.0)
+            result.append((x + normal_x * offset, y + normal_y * offset))
+
+        if closed and result:
+            result.append(result[0])
+
+        return result
     
     def generate_broken_points(self, x1: float, y1: float, x2: float, y2: float,
                                 break_height: float = 12.0, break_width: float = 10.0,

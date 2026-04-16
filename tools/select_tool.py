@@ -3,6 +3,7 @@ import math
 import tkinter as tk
 from typing import Optional, Tuple, Any
 from .base import Tool
+from shapes import LinearDimension, RadialDimension, AngularDimension
 
 
 class SelectTool(Tool):
@@ -85,18 +86,50 @@ class SelectTool(Tool):
         
         # Перетаскивание фигуры
         if self._dragging_shape and self._drag_start:
-            world_x, world_y = self.app.view_transform.screen_to_world(px, py, w, h)
-            dx = world_x - self._drag_start[0]
-            dy = world_y - self._drag_start[1]
-            
-            self._dragging_shape.translate(dx, dy)
-            self._drag_start = (world_x, world_y)
+            world_point = self._get_snap_point(event)
+
+            if isinstance(self._dragging_shape, LinearDimension):
+                self._move_linear_dimension(self._dragging_shape, world_point)
+            elif isinstance(self._dragging_shape, RadialDimension):
+                self._move_radial_dimension(self._dragging_shape, world_point)
+            elif isinstance(self._dragging_shape, AngularDimension):
+                self._move_angular_dimension(self._dragging_shape, world_point)
+            else:
+                dx = world_point[0] - self._drag_start[0]
+                dy = world_point[1] - self._drag_start[1]
+                self._dragging_shape.translate(dx, dy)
+                self._drag_start = world_point
             
             # Обновляем панель свойств в реальном времени
             if hasattr(self.app, 'properties_panel'):
                 self.app.properties_panel.refresh()
             
             self.app.redraw()
+
+    def _move_linear_dimension(self, shape: LinearDimension,
+                               world_point: Tuple[float, float]) -> None:
+        """Переместить линейный размер по нормали к размерной линии."""
+        shape.set_offset_from_point(world_point[0], world_point[1])
+        self._drag_start = world_point
+
+    def _move_radial_dimension(self, shape: RadialDimension,
+                               world_point: Tuple[float, float]) -> None:
+        """Повернуть радиальный размер вокруг центра."""
+        dx = world_point[0] - shape.cx
+        dy = world_point[1] - shape.cy
+        if math.hypot(dx, dy) <= 1e-6:
+            return
+        shape.angle_rad = math.atan2(dy, dx)
+        self._drag_start = world_point
+
+    def _move_angular_dimension(self, shape: AngularDimension,
+                                world_point: Tuple[float, float]) -> None:
+        """Изменить радиус и сторону углового размера."""
+        dx = world_point[0] - shape.cx
+        dy = world_point[1] - shape.cy
+        shape.radius = max(0.1, math.hypot(dx, dy))
+        shape.update_arc_side(world_point[0], world_point[1])
+        self._drag_start = world_point
     
     def on_mouse_up(self, event: tk.Event) -> None:
         """Обработка отпускания кнопки мыши"""
@@ -169,6 +202,12 @@ class SelectTool(Tool):
             # Разные цвета для разных типов точек
             if 'center' in point_id:
                 fill = "#ff00ff"
+                outline = "#ffffff"
+            elif 'shelf' in point_id:
+                fill = "#ffb347"
+                outline = "#ffffff"
+            elif 'text' in point_id:
+                fill = "#ffff00"
                 outline = "#ffffff"
             elif 'start' in point_id or 'end' in point_id or 'corner' in point_id:
                 fill = "#00ffff"

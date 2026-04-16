@@ -98,3 +98,75 @@ class Shape(ABC):
         Переопределяется в подклассах для криволинейных фигур.
         """
         return []
+
+    def _get_style_draw_params(self, renderer: Any) -> Tuple[int, Optional[Tuple[int, ...]], str, Any]:
+        """Получить параметры отрисовки линии из менеджера стилей."""
+        line_width = 3
+        dash_pattern = None
+        line_type = 'solid'
+        style = None
+
+        if hasattr(renderer, 'style_manager') and renderer.style_manager:
+            style = renderer.style_manager.get_style(self.line_style_name)
+            if style:
+                line_width = renderer.style_manager.mm_to_pixels(style.thickness_mm)
+                dash_pattern = style.get_dash_pattern()
+                line_type = style.line_type
+
+        return line_width, dash_pattern, line_type, style
+
+    def _draw_styled_screen_path(
+        self,
+        renderer: Any,
+        screen_points: List[Tuple[float, float]],
+        color: str,
+        line_width: int,
+        dash_pattern: Optional[Tuple[int, ...]],
+        line_type: str,
+        style: Any,
+        closed: bool = False,
+        smooth: bool = False
+    ) -> None:
+        """Нарисовать контур с учетом простых и процедурных стилей линий."""
+        if len(screen_points) < 2:
+            return
+
+        draw_points = list(screen_points)
+        draw_smooth = smooth
+        draw_dash = dash_pattern
+
+        if hasattr(renderer, 'style_manager') and renderer.style_manager and style:
+            if line_type == 'wavy':
+                draw_points = renderer.style_manager.generate_wavy_path_points(
+                    screen_points,
+                    style.wave_amplitude,
+                    style.wave_length,
+                    closed=closed
+                )
+                draw_dash = None
+                draw_smooth = True
+            elif line_type == 'broken':
+                draw_points = renderer.style_manager.generate_broken_path_points(
+                    screen_points,
+                    getattr(style, 'break_height', 12.0),
+                    getattr(style, 'break_width', 10.0),
+                    getattr(style, 'break_count', 1),
+                    closed=closed
+                )
+                draw_dash = None
+                draw_smooth = False
+            elif closed and draw_points[0] != draw_points[-1]:
+                draw_points.append(draw_points[0])
+        elif closed and draw_points[0] != draw_points[-1]:
+            draw_points.append(draw_points[0])
+
+        flat_points = [coord for point in draw_points for coord in point]
+        if len(flat_points) >= 4:
+            renderer.canvas.create_line(
+                *flat_points,
+                fill=color,
+                width=line_width,
+                dash=draw_dash,
+                smooth=draw_smooth,
+                tags="shape"
+            )

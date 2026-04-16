@@ -5,7 +5,12 @@ from core import CoordinateConverter, CanvasRenderer, UIBuilder
 from managers import ShapeManager, SnapManager, SnapType, GridManager
 from managers.line_style_manager import LineStyleManager
 from tools import DrawTool, SelectTool, PanTool, NavigationHandler, DimensionTool, PrimitiveType, CreationMode, PRIMITIVE_NAMES, PRIMITIVE_MODES
-from shapes import Segment, Circle, Arc, Rectangle, Ellipse, Polygon, Spline
+from shapes import Segment, Circle, Arc, Rectangle, Ellipse, Polygon, Spline, Dimension
+from shapes.dimension import (
+    RADIAL_DISPLAY_MODES, RADIAL_DISPLAY_MODE_NAMES,
+    LINEAR_DIMENSION_MODE_NAMES, ARROW_SHAPES, ARROW_SHAPE_NAMES, DIMENSION_PREFIX_PRESETS,
+    DIMENSION_FONT_TYPES, DIMENSION_FONT_TYPE_NAMES
+)
 from view_transform import ViewTransform
 from dialogs import StyleManagerDialog, ThemeDialog
 from ui import RibbonBuilder, PropertiesPanel
@@ -58,6 +63,21 @@ class GeometryApp(tk.Tk):
         self.primitive_type_var = tk.StringVar(value="segment")
         self.creation_mode_var = tk.StringVar(value="default")
         self.dimension_mode_var = tk.StringVar(value="linear")
+        self.dimension_linear_mode_var = tk.StringVar(
+            value=LINEAR_DIMENSION_MODE_NAMES['aligned']
+        )
+        self.dimension_display_mode_var = tk.StringVar(
+            value=RADIAL_DISPLAY_MODE_NAMES['leader']
+        )
+        self.dimension_shelf_offset_var = tk.DoubleVar(value=15.0)
+        self.dimension_font_size_var = tk.IntVar(value=12)
+        self.dimension_font_type_var = tk.StringVar(
+            value=DIMENSION_FONT_TYPE_NAMES['type_b_italic']
+        )
+        self.dimension_arrow_shape_var = tk.StringVar(value=ARROW_SHAPE_NAMES['triangle'])
+        self.dimension_arrow_filled_var = tk.BooleanVar(value=True)
+        self.dimension_arrow_size_var = tk.DoubleVar(value=15.0)
+        self.dimension_text_prefix_var = tk.StringVar(value="")
         
         # Параметры примитивов
         self.polygon_sides_var = tk.IntVar(value=6)
@@ -78,7 +98,6 @@ class GeometryApp(tk.Tk):
 
         self._build_ui()
         self._bind_events()
-        
         # Шаг сетки теперь управляется через GridManager
         self.grid_manager.base_step = self.grid_step_var.get()
         
@@ -138,8 +157,8 @@ class GeometryApp(tk.Tk):
         panel.pack_propagate(False)
         
         # === Инструменты ===
-        tools_frame = ttk.LabelFrame(panel, text="  Инструменты  ", padding=8)
-        tools_frame.pack(fill=tk.X, padx=6, pady=6)
+        self.tools_frame = ttk.LabelFrame(panel, text="  Инструменты  ", padding=8)
+        self.tools_frame.pack(fill=tk.X, padx=6, pady=6)
         
         tools_data = [
             ("🖊 Рисование", "draw", "D"),
@@ -149,7 +168,7 @@ class GeometryApp(tk.Tk):
         ]
         
         for text, value, hotkey in tools_data:
-            frame = ttk.Frame(tools_frame)
+            frame = ttk.Frame(self.tools_frame)
             frame.pack(fill=tk.X, pady=2)
             ttk.Radiobutton(frame, text=text, variable=self.tool_var,
                            value=value, command=lambda v=value: self.set_tool(v),
@@ -158,8 +177,8 @@ class GeometryApp(tk.Tk):
                      font=("Consolas", 9)).pack(side=tk.RIGHT, padx=4)
         
         # === Примитивы ===
-        prims_frame = ttk.LabelFrame(panel, text="  Примитивы  ", padding=8)
-        prims_frame.pack(fill=tk.X, padx=6, pady=6)
+        self.prims_frame = ttk.LabelFrame(panel, text="  Примитивы  ", padding=8)
+        self.prims_frame.pack(fill=tk.X, padx=6, pady=6)
         
         primitives = [
             ("╱ Отрезок", PrimitiveType.SEGMENT),
@@ -174,7 +193,7 @@ class GeometryApp(tk.Tk):
         
         self.primitive_buttons = {}
         for text, ptype in primitives:
-            btn = ttk.Button(prims_frame, text=text, width=18,
+            btn = ttk.Button(self.prims_frame, text=text, width=18,
                             command=lambda pt=ptype: self._set_primitive_type(pt))
             btn.pack(fill=tk.X, pady=2)
             self.primitive_buttons[ptype] = btn
@@ -263,7 +282,7 @@ class GeometryApp(tk.Tk):
         style_frame.pack(fill=tk.X, padx=6, pady=6)
         
         self.style_combo = ttk.Combobox(style_frame, textvariable=self.current_style_var,
-                                        values=self.style_manager.get_style_names(),
+                                        values=self.style_manager.get_general_style_names(),
                                         state="readonly")
         self.style_combo.bind("<<ComboboxSelected>>", self._on_current_style_changed)
         self.style_combo.pack(fill=tk.X, pady=(0, 4))
@@ -329,6 +348,180 @@ class GeometryApp(tk.Tk):
         self.empty_params = ttk.Label(self.params_frame, 
                                       text="Нет параметров",
                                       foreground="#888888")
+
+        self.dimension_params = ttk.Frame(self.params_frame)
+
+        dim_linear_row = ttk.Frame(self.dimension_params)
+        dim_linear_row.pack(fill=tk.X, pady=2)
+        self.dimension_linear_label = ttk.Label(dim_linear_row, text="Линейный:")
+        self.dimension_linear_label.pack(side=tk.LEFT)
+        self.dimension_linear_mode_combo = ttk.Combobox(
+            dim_linear_row,
+            textvariable=self.dimension_linear_mode_var,
+            values=list(LINEAR_DIMENSION_MODE_NAMES.values()),
+            state="readonly",
+            width=18
+        )
+        self.dimension_linear_mode_combo.pack(side=tk.RIGHT)
+        self.dimension_linear_mode_combo.bind(
+            "<<ComboboxSelected>>",
+            self._on_dimension_linear_mode_changed
+        )
+
+        dim_mode_row = ttk.Frame(self.dimension_params)
+        dim_mode_row.pack(fill=tk.X, pady=2)
+        self.dimension_display_label = ttk.Label(dim_mode_row, text="Оформление:")
+        self.dimension_display_label.pack(side=tk.LEFT)
+        self.dimension_display_mode_combo = ttk.Combobox(
+            dim_mode_row,
+            textvariable=self.dimension_display_mode_var,
+            state="readonly",
+            width=18
+        )
+        self.dimension_display_mode_combo.pack(side=tk.RIGHT)
+        self.dimension_display_mode_combo.bind(
+            "<<ComboboxSelected>>",
+            self._on_dimension_display_mode_changed
+        )
+
+        dim_shelf_row = ttk.Frame(self.dimension_params)
+        dim_shelf_row.pack(fill=tk.X, pady=2)
+        self.dimension_shelf_label = ttk.Label(dim_shelf_row, text="Вынос полки:")
+        self.dimension_shelf_label.pack(side=tk.LEFT)
+        self.dimension_shelf_spin = ttk.Spinbox(
+            dim_shelf_row,
+            from_=0,
+            to=300,
+            increment=5,
+            textvariable=self.dimension_shelf_offset_var,
+            width=8,
+            command=self._on_dimension_shelf_offset_changed
+        )
+        self.dimension_shelf_spin.pack(side=tk.RIGHT)
+        self.dimension_shelf_spin.bind(
+            '<Return>', lambda e: self._on_dimension_shelf_offset_changed()
+        )
+        self.dimension_shelf_spin.bind(
+            '<FocusOut>', lambda e: self._on_dimension_shelf_offset_changed()
+        )
+
+        dim_font_row = ttk.Frame(self.dimension_params)
+        dim_font_row.pack(fill=tk.X, pady=2)
+        ttk.Label(dim_font_row, text="Шрифт (пт):").pack(side=tk.LEFT)
+        self.dimension_font_spin = ttk.Spinbox(
+            dim_font_row,
+            from_=6,
+            to=72,
+            increment=1,
+            textvariable=self.dimension_font_size_var,
+            width=8,
+            command=self._on_dimension_font_size_changed
+        )
+        self.dimension_font_spin.pack(side=tk.RIGHT)
+        self.dimension_font_spin.bind(
+            '<Return>', lambda e: self._on_dimension_font_size_changed()
+        )
+        self.dimension_font_spin.bind(
+            '<FocusOut>', lambda e: self._on_dimension_font_size_changed()
+        )
+
+        dim_font_type_row = ttk.Frame(self.dimension_params)
+        dim_font_type_row.pack(fill=tk.X, pady=2)
+        ttk.Label(dim_font_type_row, text="Тип шрифта:").pack(side=tk.LEFT)
+        self.dimension_font_type_combo = ttk.Combobox(
+            dim_font_type_row,
+            textvariable=self.dimension_font_type_var,
+            values=[DIMENSION_FONT_TYPE_NAMES[key] for key in DIMENSION_FONT_TYPES],
+            state="readonly",
+            width=18
+        )
+        self.dimension_font_type_combo.pack(side=tk.RIGHT)
+        self.dimension_font_type_combo.bind(
+            "<<ComboboxSelected>>",
+            self._on_dimension_font_type_changed
+        )
+
+        dim_arrow_row = ttk.Frame(self.dimension_params)
+        dim_arrow_row.pack(fill=tk.X, pady=2)
+        ttk.Label(dim_arrow_row, text="Стрелка:").pack(side=tk.LEFT)
+        self.dimension_arrow_shape_combo = ttk.Combobox(
+            dim_arrow_row,
+            textvariable=self.dimension_arrow_shape_var,
+            values=[ARROW_SHAPE_NAMES[key] for key in ARROW_SHAPES],
+            state="readonly",
+            width=18
+        )
+        self.dimension_arrow_shape_combo.pack(side=tk.RIGHT)
+        self.dimension_arrow_shape_combo.bind(
+            "<<ComboboxSelected>>",
+            self._on_dimension_arrow_shape_changed
+        )
+
+        dim_arrow_fill_row = ttk.Frame(self.dimension_params)
+        dim_arrow_fill_row.pack(fill=tk.X, pady=2)
+        self.dimension_arrow_fill_check = ttk.Checkbutton(
+            dim_arrow_fill_row,
+            text="Заполненная",
+            variable=self.dimension_arrow_filled_var,
+            command=self._on_dimension_arrow_filled_changed
+        )
+        self.dimension_arrow_fill_check.pack(side=tk.LEFT)
+
+        dim_arrow_size_row = ttk.Frame(self.dimension_params)
+        dim_arrow_size_row.pack(fill=tk.X, pady=2)
+        ttk.Label(dim_arrow_size_row, text="Размер стрелок:").pack(side=tk.LEFT)
+        self.dimension_arrow_size_spin = ttk.Spinbox(
+            dim_arrow_size_row,
+            from_=3,
+            to=50,
+            increment=1,
+            textvariable=self.dimension_arrow_size_var,
+            width=8,
+            command=self._on_dimension_arrow_size_changed
+        )
+        self.dimension_arrow_size_spin.pack(side=tk.RIGHT)
+        self.dimension_arrow_size_spin.bind(
+            '<Return>', lambda e: self._on_dimension_arrow_size_changed()
+        )
+        self.dimension_arrow_size_spin.bind(
+            '<FocusOut>', lambda e: self._on_dimension_arrow_size_changed()
+        )
+
+        dim_prefix_row = ttk.Frame(self.dimension_params)
+        dim_prefix_row.pack(fill=tk.X, pady=2)
+        ttk.Label(dim_prefix_row, text="Префикс:").pack(side=tk.LEFT)
+        self.dimension_prefix_combo = ttk.Combobox(
+            dim_prefix_row,
+            textvariable=self.dimension_text_prefix_var,
+            values=DIMENSION_PREFIX_PRESETS,
+            state="normal",
+            width=18
+        )
+        self.dimension_prefix_combo.pack(side=tk.RIGHT)
+        self.dimension_prefix_combo.bind(
+            "<<ComboboxSelected>>",
+            self._on_dimension_text_prefix_changed
+        )
+        self.dimension_prefix_combo.bind(
+            '<Return>', lambda e: self._on_dimension_text_prefix_changed()
+        )
+        self.dimension_prefix_combo.bind(
+            '<FocusOut>', lambda e: self._on_dimension_text_prefix_changed()
+        )
+
+        ttk.Button(
+            self.dimension_params,
+            text="⚙ Стиль размеров",
+            command=self._open_style_manager
+        ).pack(fill=tk.X, pady=(6, 2))
+
+        self.dimension_params_hint = ttk.Label(
+            self.dimension_params,
+            text="Параметры применяются сразу\nк новому размеру",
+            foreground="#888888",
+            justify=tk.LEFT
+        )
+        self.dimension_params_hint.pack(anchor=tk.W, pady=(6, 0))
         
         self._update_params_visibility()
         # Инициализация параметров в DrawTool
@@ -336,11 +529,13 @@ class GeometryApp(tk.Tk):
         self._on_polygon_inscribed_changed()
         self._on_rect_corner_changed()
         self._on_rect_chamfer_changed()
+        self.sync_dimension_ui_from_tool()
     
     def _update_params_visibility(self) -> None:
         """Обновить видимость параметров"""
         self.polygon_params.pack_forget()
         self.rect_params.pack_forget()
+        self.dimension_params.pack_forget()
         self.empty_params.pack_forget()
         
         self.empty_params.pack_forget()
@@ -348,14 +543,209 @@ class GeometryApp(tk.Tk):
         ptype = self.draw_tool.primitive_type
         
         if self.tool_var.get() == "dimension":
-            # Покажем режимы размеров вместо свойств примитивов
-            pass
+            self.dimension_params.pack(fill=tk.X)
+            self.sync_dimension_ui_from_tool()
         elif ptype == PrimitiveType.POLYGON:
             self.polygon_params.pack(fill=tk.X)
         elif ptype == PrimitiveType.RECTANGLE:
             self.rect_params.pack(fill=tk.X)
         else:
             self.empty_params.pack(anchor=tk.W)
+
+    def _set_dimension_mode(self, mode: str) -> None:
+        """Установить режим размеров и обновить параметры."""
+        self.dimension_mode_var.set(mode)
+        self.dimension_tool.set_mode(mode)
+        self._update_params_visibility()
+        if hasattr(self, "canvas"):
+            self.canvas.focus_set()
+
+    def _on_dimension_linear_mode_changed(self, event=None) -> None:
+        """Изменение режима линейного размера."""
+        label = self.dimension_linear_mode_var.get()
+        label_to_mode = {
+            value: key for key, value in LINEAR_DIMENSION_MODE_NAMES.items()
+        }
+        mode = label_to_mode.get(label)
+        if mode:
+            self.dimension_tool.set_linear_mode(mode)
+            self.sync_dimension_ui_from_tool()
+        if hasattr(self, "canvas"):
+            self.canvas.focus_set()
+
+    def _get_available_dimension_display_modes(self) -> list[str]:
+        """Доступные варианты оформления для текущего типа радиального размера."""
+        if self.dimension_mode_var.get() == "diameter":
+            return RADIAL_DISPLAY_MODES
+        return ['leader', 'aligned']
+
+    def _on_dimension_display_mode_changed(self, event=None) -> None:
+        """Изменение оформления радиального размера."""
+        label = self.dimension_display_mode_var.get()
+        label_to_mode = {
+            RADIAL_DISPLAY_MODE_NAMES[key]: key
+            for key in self._get_available_dimension_display_modes()
+        }
+        mode = label_to_mode.get(label)
+        if mode:
+            self.dimension_tool.set_radial_display_mode(mode)
+            self.sync_dimension_ui_from_tool()
+        if hasattr(self, "canvas"):
+            self.canvas.focus_set()
+
+    def _on_dimension_shelf_offset_changed(self) -> None:
+        """Изменение выноса радиального размера для текущего режима."""
+        try:
+            value = float(self.dimension_shelf_offset_var.get())
+        except (ValueError, tk.TclError):
+            return
+        current_mode = self.dimension_tool.default_radial_display_mode
+        if current_mode == 'leader':
+            self.dimension_tool.set_radial_shelf_offset(value)
+        elif current_mode == 'aligned':
+            self.dimension_tool.set_radial_line_extension(value)
+        elif current_mode == 'outside':
+            self.dimension_tool.set_radial_outside_offset(value)
+        if hasattr(self, "canvas"):
+            self.canvas.focus_set()
+
+    def _on_dimension_font_size_changed(self) -> None:
+        """Изменение размера шрифта размеров."""
+        try:
+            value = int(self.dimension_font_size_var.get())
+        except (ValueError, tk.TclError):
+            return
+        self.dimension_tool.set_font_size(value)
+        if hasattr(self, "canvas"):
+            self.canvas.focus_set()
+
+    def _on_dimension_font_type_changed(self, event=None) -> None:
+        """Изменение типа шрифта размеров."""
+        label = self.dimension_font_type_var.get()
+        label_to_type = {
+            value: key for key, value in DIMENSION_FONT_TYPE_NAMES.items()
+        }
+        font_type = label_to_type.get(label)
+        if font_type:
+            self.dimension_tool.set_font_type(font_type)
+            self.sync_dimension_ui_from_tool()
+        if hasattr(self, "canvas"):
+            self.canvas.focus_set()
+
+    def _is_fillable_arrow_shape(self, arrow_shape: str) -> bool:
+        """Проверить, поддерживает ли форма заполнение."""
+        return arrow_shape in ('triangle', 'square', 'circle')
+
+    def _update_dimension_arrow_fill_state(self) -> None:
+        """Обновить доступность галочки заполнения."""
+        if not hasattr(self, 'dimension_arrow_fill_check'):
+            return
+        arrow_shape = self.dimension_tool.default_arrow_shape
+        state = "normal" if self._is_fillable_arrow_shape(arrow_shape) else "disabled"
+        self.dimension_arrow_fill_check.configure(state=state)
+
+    def _on_dimension_arrow_shape_changed(self, event=None) -> None:
+        """Изменение формы стрелки размеров."""
+        label = self.dimension_arrow_shape_var.get()
+        label_to_shape = {
+            value: key for key, value in ARROW_SHAPE_NAMES.items()
+        }
+        arrow_shape = label_to_shape.get(label)
+        if arrow_shape:
+            self.dimension_tool.set_arrow_shape(arrow_shape)
+            self.sync_dimension_ui_from_tool()
+        if hasattr(self, "canvas"):
+            self.canvas.focus_set()
+
+    def _on_dimension_arrow_filled_changed(self) -> None:
+        """Изменение заполнения стрелок."""
+        self.dimension_tool.set_arrow_filled(self.dimension_arrow_filled_var.get())
+        if hasattr(self, "canvas"):
+            self.canvas.focus_set()
+
+    def _on_dimension_arrow_size_changed(self) -> None:
+        """Изменение размера стрелок."""
+        try:
+            value = float(self.dimension_arrow_size_var.get())
+        except (ValueError, tk.TclError):
+            return
+        self.dimension_tool.set_arrow_size(value)
+        if hasattr(self, "canvas"):
+            self.canvas.focus_set()
+
+    def _on_dimension_text_prefix_changed(self, event=None) -> None:
+        """Изменение префикса размера."""
+        self.dimension_tool.set_text_prefix(self.dimension_text_prefix_var.get())
+        if hasattr(self, "canvas"):
+            self.after_idle(self.canvas.focus_set)
+
+    def sync_dimension_ui_from_tool(self) -> None:
+        """Синхронизировать панель параметров размеров с текущим инструментом."""
+        mode = self.dimension_tool.mode
+        available_modes = self._get_available_dimension_display_modes()
+        mode_labels = [RADIAL_DISPLAY_MODE_NAMES[key] for key in available_modes]
+        self.dimension_display_mode_combo.configure(values=mode_labels)
+
+        current_mode = self.dimension_tool.default_radial_display_mode
+        if current_mode not in available_modes:
+            current_mode = available_modes[0]
+        self.dimension_display_mode_var.set(RADIAL_DISPLAY_MODE_NAMES[current_mode])
+        self.dimension_linear_mode_var.set(
+            LINEAR_DIMENSION_MODE_NAMES.get(
+                self.dimension_tool.default_linear_mode, LINEAR_DIMENSION_MODE_NAMES['aligned']
+            )
+        )
+        self.dimension_font_size_var.set(self.dimension_tool.default_font_size)
+        self.dimension_font_type_var.set(
+            DIMENSION_FONT_TYPE_NAMES.get(
+                self.dimension_tool.default_font_type, DIMENSION_FONT_TYPE_NAMES['type_b_italic']
+            )
+        )
+        self.dimension_arrow_shape_var.set(
+            ARROW_SHAPE_NAMES.get(
+                self.dimension_tool.default_arrow_shape, ARROW_SHAPE_NAMES['triangle']
+            )
+        )
+        self.dimension_arrow_filled_var.set(self.dimension_tool.default_arrow_filled)
+        self.dimension_arrow_size_var.set(self.dimension_tool.default_arrow_size)
+        self.dimension_text_prefix_var.set(self.dimension_tool.default_text_prefix)
+        self._update_dimension_arrow_fill_state()
+
+        is_radial_mode = mode in ("radius", "diameter")
+        is_linear_mode = mode == "linear"
+        self.dimension_linear_mode_combo.configure(
+            state="readonly" if is_linear_mode else "disabled"
+        )
+        if is_radial_mode:
+            self.dimension_display_mode_combo.configure(state="readonly")
+            self.dimension_display_label.configure(text="Оформление:")
+            if current_mode == 'leader':
+                self.dimension_shelf_label.configure(text="Вынос полки:")
+                self.dimension_shelf_offset_var.set(self.dimension_tool.default_radial_shelf_offset)
+                self.dimension_shelf_spin.configure(state="normal")
+            elif current_mode == 'aligned':
+                self.dimension_shelf_label.configure(text="Вынос линии:")
+                self.dimension_shelf_offset_var.set(self.dimension_tool.default_radial_line_extension)
+                self.dimension_shelf_spin.configure(state="normal")
+            elif current_mode == 'outside':
+                self.dimension_shelf_label.configure(text="Отступ размера:")
+                self.dimension_shelf_offset_var.set(self.dimension_tool.default_radial_outside_offset)
+                self.dimension_shelf_spin.configure(state="normal")
+            else:
+                self.dimension_shelf_label.configure(text="Вынос полки:")
+                self.dimension_shelf_offset_var.set(self.dimension_tool.default_radial_shelf_offset)
+                self.dimension_shelf_spin.configure(state="disabled")
+            self.dimension_params_hint.configure(
+                text="Параметры применяются сразу\nк новому размеру"
+            )
+        else:
+            self.dimension_display_mode_combo.configure(state="disabled")
+            self.dimension_shelf_spin.configure(state="disabled")
+            self.dimension_display_label.configure(text="Оформление:")
+            self.dimension_shelf_label.configure(text="Вынос полки:")
+            self.dimension_params_hint.configure(
+                text="Общие параметры применяются сразу\nк новому размеру"
+            )
     
     def _create_toolbar(self) -> None:
         """Создание панели инструментов (toolbar)"""
@@ -512,8 +902,9 @@ class GeometryApp(tk.Tk):
             ttk.Radiobutton(
                 self.dim_modes_frame, text=label,
                 variable=self.dimension_mode_var, value=mode,
-                command=lambda m=mode: self.dimension_tool.set_mode(m)
+                command=lambda m=mode: self._set_dimension_mode(m)
             ).pack(anchor=tk.W, pady=1)
+
     
     def _set_primitive_type(self, ptype: PrimitiveType) -> None:
         """Установить тип примитива"""
@@ -526,6 +917,8 @@ class GeometryApp(tk.Tk):
     def _set_creation_mode(self, mode: CreationMode) -> None:
         self.creation_mode_var.set(mode.name)
         self.draw_tool.creation_mode = mode
+        if hasattr(self, "canvas"):
+            self.canvas.focus_set()
     
     def _on_polygon_sides_changed(self) -> None:
         self.draw_tool.set_polygon_sides(self.polygon_sides_var.get())
@@ -558,7 +951,7 @@ class GeometryApp(tk.Tk):
         except (ValueError, tk.TclError):
             pass
         self.redraw()
-    
+
     def _create_status_bar(self) -> None:
         """Создание строки состояния"""
         status_frame = ttk.Frame(self)
@@ -614,8 +1007,10 @@ class GeometryApp(tk.Tk):
             return  # Пусть виджет обрабатывает сам
         
         if isinstance(self.current_tool, DrawTool):
-            # Сначала даём DrawTool обработать клавишу
-            # DrawTool сам решает, перехватывать ли Delete/Backspace (только если есть активный ввод)
+            if self.current_tool.on_key_press(event):
+                return
+        
+        if isinstance(self.current_tool, DimensionTool):
             if self.current_tool.on_key_press(event):
                 return
         
@@ -676,6 +1071,7 @@ class GeometryApp(tk.Tk):
             "dimension": "Кликните для выбора точек/объектов"
         }
         self.hint_label.config(text=hints.get(tool_name, ""))
+        self.canvas.focus_set()
         
         self.redraw()
 
@@ -690,6 +1086,10 @@ class GeometryApp(tk.Tk):
 
     def _on_right_click(self, event: tk.Event) -> None:
         if isinstance(self.current_tool, DrawTool):
+            if self.current_tool.on_right_click(event):
+                return
+        
+        if isinstance(self.current_tool, DimensionTool):
             if self.current_tool.on_right_click(event):
                 return
         
@@ -773,10 +1173,43 @@ class GeometryApp(tk.Tk):
         self.snap_label.config(text="Привязки" if snap_on else "Откл.")
 
     def _on_delete_shape(self) -> None:
-        if self.shape_manager.has_shapes():
-            if not self.shape_manager.remove_selected():
-                self.shape_manager.remove_last()
-            self.redraw()
+        if not self.shape_manager.has_shapes():
+            return
+        
+        # Определяем, какую фигуру удаляем
+        shape_to_delete = self.shape_manager.get_selected_shape()
+        if not shape_to_delete:
+            shape_to_delete = self.shape_manager.get_all_shapes()[-1] if self.shape_manager.get_all_shapes() else None
+        
+        if not shape_to_delete:
+            return
+        
+        # Проверяем, есть ли привязанные размеры (только если удаляем НЕ размер)
+        if not isinstance(shape_to_delete, Dimension):
+            shape_id = getattr(shape_to_delete, 'id', None)
+            if shape_id:
+                deps = self.shape_manager.find_dependent_dimensions(shape_id)
+                if deps:
+                    n = len(deps)
+                    answer = messagebox.askyesnocancel(
+                        "Удаление элемента",
+                        f"К этому элементу привязано {n} размер(ов).\n\n"
+                        "Да — удалить элемент вместе с размерами\n"
+                        "Нет — удалить только элемент (размеры останутся)\n"
+                        "Отмена — не удалять"
+                    )
+                    if answer is None:  # Отмена
+                        return
+                    if answer:  # Да — каскадное удаление (поведение по умолчанию)
+                        self.shape_manager.remove_shape(shape_to_delete)
+                    else:  # Нет — удалить без каскада
+                        self.shape_manager.remove_shape_no_cascade(shape_to_delete)
+                    self.redraw()
+                    return
+        
+        # Обычное удаление (без зависимых размеров или удаляем сам размер)
+        self.shape_manager.remove_shape(shape_to_delete)
+        self.redraw()
 
     def _on_export_dxf(self) -> None:
         """Экспорт в DXF"""
@@ -897,7 +1330,7 @@ class GeometryApp(tk.Tk):
         self.renderer.clear_objects("shape", "preview", "axis_indicator", "control_points", "snap_indicator")
         self.renderer.draw_shapes(self.shape_manager.get_all_shapes(), w, h, self.view_transform, self.POINT_RADIUS)
         
-        if isinstance(self.current_tool, DrawTool):
+        if isinstance(self.current_tool, (DrawTool, DimensionTool)):
             self.current_tool.draw_preview(self.renderer, w, h, self.view_transform)
         
         if isinstance(self.current_tool, SelectTool):

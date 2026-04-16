@@ -47,7 +47,10 @@ class StyleManagerDialog(tk.Toplevel):
         scroll.config(command=self.style_listbox.yview)
         
         for style in self.style_manager.get_all_styles():
-            marker = "●" if style.is_standard else "○"
+            if getattr(style, 'is_dimension_style', False):
+                marker = "◆"
+            else:
+                marker = "●" if style.is_standard else "○"
             self.style_listbox.insert(tk.END, f"{marker} {style.name}")
         
         self.style_listbox.bind("<<ListboxSelect>>", self._on_style_select)

@@ -15,7 +15,38 @@ class ShapeManager:
         self._shapes.append(shape)
     
     def remove_shape(self, shape: Shape) -> None:
-        """Удалить фигуру"""
+        """Удалить фигуру и зависимые размеры"""
+        if shape in self._shapes:
+            self._shapes.remove(shape)
+            if self._selected_shape == shape:
+                self._selected_shape = None
+            # Каскадное удаление зависимых размеров
+            shape_id = getattr(shape, 'id', None)
+            if shape_id:
+                self._remove_dependent_dimensions(shape_id)
+    
+    def _remove_dependent_dimensions(self, shape_id: str) -> None:
+        """Удалить размеры, привязанные к фигуре с данным id"""
+        to_remove = self.find_dependent_dimensions(shape_id)
+        for s in to_remove:
+            if s in self._shapes:
+                self._shapes.remove(s)
+                if self._selected_shape == s:
+                    self._selected_shape = None
+    
+    def find_dependent_dimensions(self, shape_id: str) -> list:
+        """Найти все размеры, привязанные к фигуре с данным id"""
+        deps = []
+        for s in self._shapes:
+            if hasattr(s, 'base_shape_id1') and hasattr(s, 'base_shape_id2'):
+                if s.base_shape_id1 == shape_id or s.base_shape_id2 == shape_id:
+                    deps.append(s)
+            elif hasattr(s, 'base_shape_id') and getattr(s, 'base_shape_id', None) == shape_id:
+                deps.append(s)
+        return deps
+    
+    def remove_shape_no_cascade(self, shape: Shape) -> None:
+        """Удалить фигуру без каскадного удаления зависимых размеров"""
         if shape in self._shapes:
             self._shapes.remove(shape)
             if self._selected_shape == shape:
@@ -31,9 +62,8 @@ class ShapeManager:
     def remove_last(self) -> bool:
         """Удалить последнюю фигуру"""
         if self._shapes:
-            last_shape = self._shapes.pop()
-            if self._selected_shape == last_shape:
-                self._selected_shape = None
+            last_shape = self._shapes[-1]
+            self.remove_shape(last_shape)
             return True
         return False
     

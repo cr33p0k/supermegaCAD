@@ -70,24 +70,25 @@ class Spline(Shape):
                                             fill=color, outline="", tags="shape")
             return
         
-        line_width = 3
-        dash_pattern = None
-        if hasattr(renderer, 'style_manager') and renderer.style_manager:
-            style = renderer.style_manager.get_style(self.line_style_name)
-            if style:
-                line_width = renderer.style_manager.mm_to_pixels(style.thickness_mm)
-                dash_pattern = style.get_dash_pattern()
+        line_width, dash_pattern, line_type, style = self._get_style_draw_params(renderer)
         if self.selected:
             line_width += 1
         
-        screen_pts = []
-        for px, py in self.get_curve_points():
-            sx, sy = view_transform.world_to_screen(px, py, width, height)
-            screen_pts.extend([sx, sy])
-        
-        if len(screen_pts) >= 4:
-            renderer.canvas.create_line(*screen_pts, fill=color, width=line_width,
-                                        dash=dash_pattern, smooth=True, tags="shape")
+        screen_pts = [
+            view_transform.world_to_screen(px, py, width, height)
+            for px, py in self.get_curve_points()
+        ]
+        self._draw_styled_screen_path(
+            renderer,
+            screen_pts,
+            color,
+            line_width,
+            dash_pattern,
+            line_type,
+            style,
+            closed=False,
+            smooth=True
+        )
         
         for i, (px, py) in enumerate(self.points):
             sx, sy = view_transform.world_to_screen(px, py, width, height)

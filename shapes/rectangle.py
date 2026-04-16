@@ -102,14 +102,7 @@ class Rectangle(Shape):
         return [self._rotate_point(m[0], m[1], cx, cy) for m in midpoints]
     
     def draw(self, renderer, width: int, height: int, view_transform, point_radius: int = 4) -> None:
-        line_width = 3
-        dash_pattern = None
-        
-        if hasattr(renderer, 'style_manager') and renderer.style_manager:
-            style = renderer.style_manager.get_style(self.line_style_name)
-            if style:
-                line_width = renderer.style_manager.mm_to_pixels(style.thickness_mm)
-                dash_pattern = style.get_dash_pattern()
+        line_width, dash_pattern, line_type, style = self._get_style_draw_params(renderer)
         
         color = "#55ff55" if self.selected else self.color
         if self.selected:
@@ -122,13 +115,21 @@ class Rectangle(Shape):
         chamfer_size = min(self.chamfer, max_corner) * view_transform.scale
         
         if corner_r > 1 and self.corner_radius > 0:
-            self._draw_rounded(renderer, corners, corner_r, color, line_width, dash_pattern)
+            self._draw_rounded(renderer, corners, corner_r, color, line_width, dash_pattern, line_type, style)
         elif chamfer_size > 1 and self.chamfer > 0:
-            self._draw_chamfered(renderer, corners, chamfer_size, color, line_width, dash_pattern)
+            self._draw_chamfered(renderer, corners, chamfer_size, color, line_width, dash_pattern, line_type, style)
         else:
-            points = [coord for c in corners for coord in c] + list(corners[0])
-            renderer.canvas.create_line(*points, fill=color, width=line_width, 
-                                        dash=dash_pattern, tags="shape")
+            self._draw_styled_screen_path(
+                renderer,
+                corners,
+                color,
+                line_width,
+                dash_pattern,
+                line_type,
+                style,
+                closed=True,
+                smooth=False
+            )
         
         # Рисуем точки на концах скруглений/фасок или углах
         feature_points = self.get_corner_feature_points()
@@ -140,7 +141,7 @@ class Rectangle(Shape):
                                         sx + point_radius, sy + point_radius,
                                         fill=color, outline="", tags="shape")
     
-    def _draw_rounded(self, renderer, corners, radius, color, line_width, dash):
+    def _draw_rounded(self, renderer, corners, radius, color, line_width, dash, line_type, style):
         """Классическое внутреннее скругление углов (филет)."""
         pts = []
         steps = 10
@@ -175,12 +176,19 @@ class Rectangle(Shape):
                 pts.append((center[0] + radius * math.cos(ang), center[1] + radius * math.sin(ang)))
 
         if len(pts) >= 3:
-            pts.append(pts[0])
-            flat = [c for p in pts for c in p]
-            renderer.canvas.create_line(*flat, fill=color, width=line_width,
-                                        dash=dash, smooth=True, tags="shape")
+            self._draw_styled_screen_path(
+                renderer,
+                pts,
+                color,
+                line_width,
+                dash,
+                line_type,
+                style,
+                closed=True,
+                smooth=True
+            )
     
-    def _draw_chamfered(self, renderer, corners, chamfer, color, line_width, dash):
+    def _draw_chamfered(self, renderer, corners, chamfer, color, line_width, dash, line_type, style):
         """Прямоугольник с фасками (срез углов внутрь)."""
         pts = []
         for i, (cx, cy) in enumerate(corners):
@@ -196,9 +204,17 @@ class Rectangle(Shape):
             pts.append(exit_)
 
         if len(pts) >= 3:
-            pts.append(pts[0])
-            flat = [c for pt in pts for c in pt]
-            renderer.canvas.create_line(*flat, fill=color, width=line_width, dash=dash, tags="shape")
+            self._draw_styled_screen_path(
+                renderer,
+                pts,
+                color,
+                line_width,
+                dash,
+                line_type,
+                style,
+                closed=True,
+                smooth=False
+            )
     
     def _normalize(self, dx, dy, length):
         d = math.hypot(dx, dy)

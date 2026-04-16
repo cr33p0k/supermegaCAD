@@ -86,7 +86,10 @@ class PropertiesPanel:
                 self._build_dimension_props(shape)
             
             # Общие свойства (стиль линии)
-            self._build_common_props(shape)
+            if shape_type in ('LinearDimension', 'RadialDimension', 'AngularDimension'):
+                self._build_dimension_style_props(shape)
+            else:
+                self._build_common_props(shape)
         
         finally:
             self._updating = False
@@ -378,32 +381,251 @@ class PropertiesPanel:
             
     def _build_dimension_props(self, shape: Any) -> None:
         """Свойства размера"""
-        self._create_string_field("Переопределение:", "text_override", shape, 0)
-        
-        ttk.Separator(self.props_frame, orient=tk.HORIZONTAL).grid(
-            row=1, column=0, columnspan=2, sticky=tk.EW, pady=6
+        from shapes import DIMENSION_PREFIX_PRESETS
+        from shapes.dimension import (
+            RADIAL_DISPLAY_MODES, RADIAL_DISPLAY_MODE_NAMES,
+            DIMENSION_FONT_TYPES, DIMENSION_FONT_TYPE_NAMES,
+            ARROW_SHAPES, ARROW_SHAPE_NAMES
         )
         
+        row = 0
+        self._create_string_field("Переопределение:", "text_override", shape, row)
+        row += 1
+        
+        ttk.Separator(self.props_frame, orient=tk.HORIZONTAL).grid(
+            row=row, column=0, columnspan=2, sticky=tk.EW, pady=6
+        )
+        row += 1
+        
+        # Фактическое значение
         if type(shape).__name__ == "LinearDimension":
-            val = __import__('core').SegmentGeometry.calculate_length(shape.p1_x, shape.p1_y, shape.p2_x, shape.p2_y)
-            ttk.Label(self.props_frame, text=f"Фактическое: {val:.2f}").grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=2)
-            self._create_field("Отступ:", "offset", shape, 3)
+            val = shape.get_measurement_value() if hasattr(shape, 'get_measurement_value') else __import__('core').SegmentGeometry.calculate_length(shape.p1_x, shape.p1_y, shape.p2_x, shape.p2_y)
+            ttk.Label(self.props_frame, text=f"Фактическое: {val:.2f}").grid(row=row, column=0, columnspan=2, sticky=tk.W, padx=2)
+            row += 1
+            if hasattr(shape, 'get_measurement_mode_name'):
+                ttk.Label(self.props_frame, text=f"Тип: {shape.get_measurement_mode_name()}").grid(
+                    row=row, column=0, columnspan=2, sticky=tk.W, padx=2
+                )
+                row += 1
+            self._create_field("Отступ:", "offset", shape, row)
+            row += 1
+            self._create_field("Смещение текста:", "text_pos_x", shape, row)
+            row += 1
             
         elif type(shape).__name__ == "RadialDimension":
             val = shape.radius * 2 if shape.is_diameter else shape.radius
-            prefix = "Ø" if shape.is_diameter else "R"
-            ttk.Label(self.props_frame, text=f"Фактическое: {prefix}{val:.2f}").grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=2)
+            prefix = "⌀" if shape.is_diameter else "R"
+            ttk.Label(self.props_frame, text=f"Фактическое: {prefix}{val:.2f}").grid(row=row, column=0, columnspan=2, sticky=tk.W, padx=2)
+            row += 1
+            ttk.Label(self.props_frame, text="Оформление:").grid(
+                row=row, column=0, sticky=tk.W, padx=2, pady=2
+            )
+            available_mode_keys = RADIAL_DISPLAY_MODES if shape.is_diameter else ['leader', 'aligned']
+            mode_labels = {
+                RADIAL_DISPLAY_MODE_NAMES[key]: key for key in available_mode_keys
+            }
+            current_mode_key = shape.display_mode if shape.display_mode in available_mode_keys else 'leader'
+            current_mode_label = RADIAL_DISPLAY_MODE_NAMES.get(current_mode_key, current_mode_key)
+            mode_var = tk.StringVar(value=current_mode_label)
+            self._vars['display_mode_label'] = mode_var
+            mode_combo = ttk.Combobox(
+                self.props_frame,
+                textvariable=mode_var,
+                values=list(mode_labels.keys()),
+                state="readonly",
+                width=18
+            )
+            mode_combo.grid(row=row, column=1, sticky=tk.EW, padx=2, pady=2)
+
+            def on_mode_change(event=None):
+                if self._updating:
+                    return
+                shape.display_mode = mode_labels[mode_var.get()]
+                self.update_for_shape(shape)
+                self.app.redraw()
+
+            mode_combo.bind("<<ComboboxSelected>>", on_mode_change)
+            row += 1
+            if current_mode_key == 'leader':
+                self._create_field("Вынос полки:", "shelf_offset", shape, row, min_val=0, max_val=300)
+                row += 1
+            elif current_mode_key == 'aligned':
+                self._create_field("Вынос линии:", "line_extension", shape, row, min_val=10, max_val=300)
+                row += 1
+            elif current_mode_key == 'outside':
+                self._create_field("Наружный отступ:", "outside_offset", shape, row, min_val=5, max_val=200)
+                row += 1
             
         elif type(shape).__name__ == "AngularDimension":
-            import math
-            angle1 = math.atan2(shape.p1_y - shape.cy, shape.p1_x - shape.cx)
-            angle2 = math.atan2(shape.p2_y - shape.cy, shape.p2_x - shape.cx)
+            import math as _math
+            angle1 = _math.atan2(shape.p1_y - shape.cy, shape.p1_x - shape.cx)
+            angle2 = _math.atan2(shape.p2_y - shape.cy, shape.p2_x - shape.cx)
             diff = angle2 - angle1
-            val_deg = math.degrees(diff) if diff > 0 else math.degrees(diff + 2 * math.pi)
+            val_deg = _math.degrees(diff) if diff > 0 else _math.degrees(diff + 2 * _math.pi)
             if val_deg > 180: val_deg = 360 - val_deg
-            ttk.Label(self.props_frame, text=f"Угол: {val_deg:.1f}°").grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=2)
-            self._create_field("Радиус дуги:", "radius", shape, 3, min_val=0.1)
-    
+            ttk.Label(self.props_frame, text=f"Угол: {val_deg:.1f}°").grid(row=row, column=0, columnspan=2, sticky=tk.W, padx=2)
+            row += 1
+            self._create_field("Радиус дуги:", "radius", shape, row, min_val=0.1)
+            row += 1
+            ttk.Label(self.props_frame, text="Сторона:").grid(
+                row=row, column=0, sticky=tk.W, padx=2, pady=2
+            )
+            angle_side_var = tk.StringVar(value="Больший" if shape.use_reflex else "Меньший")
+            self._vars['angle_side'] = angle_side_var
+            angle_side_combo = ttk.Combobox(
+                self.props_frame,
+                textvariable=angle_side_var,
+                values=["Меньший", "Больший"],
+                state="readonly",
+                width=18
+            )
+            angle_side_combo.grid(row=row, column=1, sticky=tk.EW, padx=2, pady=2)
+
+            def on_angle_side_change(event=None):
+                if self._updating:
+                    return
+                shape.use_reflex = angle_side_var.get() == "Больший"
+                self.app.redraw()
+
+            angle_side_combo.bind("<<ComboboxSelected>>", on_angle_side_change)
+            row += 1
+
+        layer_name = getattr(shape, 'layer', '')
+        if layer_name:
+            ttk.Label(self.props_frame, text=f"Слой: {layer_name}").grid(
+                row=row, column=0, columnspan=2, sticky=tk.W, padx=2
+            )
+            row += 1
+        
+        # --- Настройки оформления ---
+        ttk.Separator(self.props_frame, orient=tk.HORIZONTAL).grid(
+            row=row, column=0, columnspan=2, sticky=tk.EW, pady=6
+        )
+        row += 1
+        
+        ttk.Label(self.props_frame, text="Оформление", font=("Arial", 9, "bold")).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, padx=2, pady=(2, 4)
+        )
+        row += 1
+        
+        # Размер шрифта
+        self._create_int_field("Шрифт (пт):", "font_size", shape, row, min_val=6, max_val=72)
+        row += 1
+
+        ttk.Label(self.props_frame, text="Тип шрифта:").grid(
+            row=row, column=0, sticky=tk.W, padx=2, pady=2
+        )
+        font_type_labels = [DIMENSION_FONT_TYPE_NAMES[key] for key in DIMENSION_FONT_TYPES]
+        current_font_type = shape.font_type if shape.font_type in DIMENSION_FONT_TYPES else 'type_b_italic'
+        font_type_var = tk.StringVar(value=DIMENSION_FONT_TYPE_NAMES[current_font_type])
+        self._vars['font_type_label'] = font_type_var
+        font_type_combo = ttk.Combobox(
+            self.props_frame,
+            textvariable=font_type_var,
+            values=font_type_labels,
+            state="readonly",
+            width=18
+        )
+        font_type_combo.grid(row=row, column=1, sticky=tk.EW, padx=2, pady=2)
+
+        def on_font_type_change(event=None):
+            if self._updating:
+                return
+            label_to_type = {
+                value: key for key, value in DIMENSION_FONT_TYPE_NAMES.items()
+            }
+            shape.font_type = label_to_type.get(font_type_var.get(), 'type_b_italic')
+            self.app.redraw()
+
+        font_type_combo.bind("<<ComboboxSelected>>", on_font_type_change)
+        row += 1
+
+        ttk.Label(self.props_frame, text="Префикс:").grid(
+            row=row, column=0, sticky=tk.W, padx=2, pady=2
+        )
+        prefix_var = tk.StringVar(value=shape.text_prefix)
+        self._vars['text_prefix'] = prefix_var
+        prefix_combo = ttk.Combobox(
+            self.props_frame,
+            textvariable=prefix_var,
+            values=DIMENSION_PREFIX_PRESETS,
+            state="normal",
+            width=18
+        )
+        prefix_combo.grid(row=row, column=1, sticky=tk.EW, padx=2, pady=2)
+
+        def on_prefix_change(event=None):
+            if self._updating:
+                return
+            shape.text_prefix = prefix_var.get().strip()
+            self.app.redraw()
+            if event and hasattr(event, 'keysym') and event.keysym == 'Return':
+                self.app.canvas.focus_set()
+
+        prefix_combo.bind("<<ComboboxSelected>>", on_prefix_change)
+        prefix_combo.bind('<Return>', on_prefix_change)
+        prefix_combo.bind('<FocusOut>', on_prefix_change)
+        row += 1
+        
+        # Форма стрелки
+        ttk.Label(self.props_frame, text="Стрелка:").grid(row=row, column=0, sticky=tk.W, padx=2, pady=2)
+        arrow_shape_var = tk.StringVar(
+            value=ARROW_SHAPE_NAMES.get(getattr(shape, 'arrow_shape', 'triangle'), ARROW_SHAPE_NAMES['triangle'])
+        )
+        self._vars['arrow_shape_label'] = arrow_shape_var
+        arrow_combo = ttk.Combobox(
+            self.props_frame, textvariable=arrow_shape_var,
+            values=[ARROW_SHAPE_NAMES[key] for key in ARROW_SHAPES], state="readonly", width=18
+        )
+        arrow_combo.grid(row=row, column=1, sticky=tk.EW, padx=2, pady=2)
+
+        arrow_fill_var = tk.BooleanVar(value=getattr(shape, 'arrow_filled', True))
+        self._vars['arrow_filled'] = arrow_fill_var
+
+        def update_arrow_fill_state() -> None:
+            current_shape = getattr(shape, 'arrow_shape', 'triangle')
+            arrow_fill_check.configure(
+                state="normal" if current_shape in ('triangle', 'square', 'circle') else "disabled"
+            )
+
+        def on_arrow_change(event=None):
+            if self._updating:
+                return
+            label_to_shape = {
+                value: key for key, value in ARROW_SHAPE_NAMES.items()
+            }
+            shape.arrow_shape = label_to_shape.get(arrow_shape_var.get(), 'triangle')
+            if shape.arrow_shape not in ('triangle', 'square', 'circle'):
+                shape.arrow_filled = False
+                arrow_fill_var.set(False)
+            shape._sync_legacy_arrow_type()
+            update_arrow_fill_state()
+            self.app.redraw()
+        arrow_combo.bind("<<ComboboxSelected>>", on_arrow_change)
+        row += 1
+
+        arrow_fill_check = ttk.Checkbutton(
+            self.props_frame,
+            text="Заполненная",
+            variable=arrow_fill_var
+        )
+        arrow_fill_check.grid(row=row, column=0, columnspan=2, sticky=tk.W, padx=2, pady=2)
+
+        def on_arrow_fill_change():
+            if self._updating:
+                return
+            shape.arrow_filled = arrow_fill_var.get()
+            shape._sync_legacy_arrow_type()
+            self.app.redraw()
+
+        arrow_fill_check.config(command=on_arrow_fill_change)
+        update_arrow_fill_state()
+        row += 1
+
+        # Размер стрелки
+        self._create_field("Размер стрелок:", "arrow_size", shape, row, min_val=3, max_val=50)
+        row += 1
+        
     def _build_spline_props(self, shape: Any) -> None:
         """Свойства сплайна"""
         self._create_field("Натяжение:", "tension", shape, 0, min_val=0, max_val=1)
@@ -463,7 +685,7 @@ class PropertiesPanel:
         style_combo = ttk.Combobox(
             self.props_frame, 
             textvariable=style_var,
-            values=self.app.style_manager.get_style_names(),
+            values=self.app.style_manager.get_general_style_names(),
             state="readonly",
             width=18
         )
@@ -480,16 +702,47 @@ class PropertiesPanel:
         
         # Настраиваем расширение колонки
         self.props_frame.columnconfigure(1, weight=1)
+
+    def _build_dimension_style_props(self, shape: Any) -> None:
+        """Показать отдельный стиль размеров без ручного выбора стиля для объекта."""
+        rows = self.props_frame.grid_size()[1]
+
+        ttk.Separator(self.props_frame, orient=tk.HORIZONTAL).grid(
+            row=rows, column=0, columnspan=2, sticky=tk.EW, pady=6
+        )
+        ttk.Label(self.props_frame, text="Стиль размера:").grid(
+            row=rows + 1, column=0, sticky=tk.W, padx=2, pady=2
+        )
+        ttk.Label(self.props_frame, text=shape.line_style_name).grid(
+            row=rows + 1, column=1, sticky=tk.W, padx=2, pady=2
+        )
+        ttk.Button(
+            self.props_frame,
+            text="Редактировать стиль",
+            command=self.app._open_style_manager
+        ).grid(row=rows + 2, column=0, columnspan=2, sticky=tk.EW, padx=2, pady=(4, 2))
+
+        self.props_frame.columnconfigure(1, weight=1)
     
     def refresh(self) -> None:
         """Обновить значения полей"""
         if self.current_shape is None:
             return
+
+        from shapes.dimension import DIMENSION_FONT_TYPE_NAMES, ARROW_SHAPE_NAMES
         
         self._updating = True
         
         try:
             for attr, var in self._vars.items():
+                if attr == 'font_type_label':
+                    font_type = getattr(self.current_shape, 'font_type', 'type_b_italic')
+                    var.set(DIMENSION_FONT_TYPE_NAMES.get(font_type, DIMENSION_FONT_TYPE_NAMES['type_b_italic']))
+                    continue
+                if attr == 'arrow_shape_label':
+                    arrow_shape = getattr(self.current_shape, 'arrow_shape', 'triangle')
+                    var.set(ARROW_SHAPE_NAMES.get(arrow_shape, ARROW_SHAPE_NAMES['triangle']))
+                    continue
                 if hasattr(self.current_shape, attr):
                     value = getattr(self.current_shape, attr)
                     if isinstance(var, tk.DoubleVar):
@@ -502,4 +755,3 @@ class PropertiesPanel:
                         var.set(str(value))
         finally:
             self._updating = False
-

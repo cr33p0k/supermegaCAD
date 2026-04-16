@@ -96,6 +96,10 @@ class DxfImporter:
         # В fallback (если T-FLEX пишет тип линии прямо в имя слоя)
         if layer_name in DXF_TO_STYLE.values() and base_linetype == 'CONTINUOUS':
             style_name = layer_name
+        elif base_linetype == 'CONTINUOUS':
+            layer_style_name = layer_name.replace("_", " ")
+            if layer_style_name in DXF_TO_STYLE.values():
+                style_name = layer_style_name
             
         # 3. ЦВЕТ
         rgb = (255, 255, 255)
@@ -182,13 +186,39 @@ class DxfImporter:
                 return
                 
             is_procedural = any(x in style_name.lower() for x in ['волнист', 'излом', 'wavy', 'broken'])
+            is_closed = False
+            try:
+                is_closed = bool(entity.closed)
+            except Exception:
+                if len(points) > 2:
+                    is_closed = math.hypot(points[0][0]-points[-1][0], points[0][1]-points[-1][1]) < 1e-5
+
+            ellipse_shape = None
+            reconstructed_shape = None
+            if is_closed and len(points) >= 32:
+                reconstructed_shape = self._try_create_circle_from_polyline(points)
+                if reconstructed_shape is None:
+                    reconstructed_shape = self._try_create_ellipse_from_polyline(points)
+            elif not is_closed and not is_procedural and len(points) >= 12:
+                reconstructed_shape = self._try_create_arc_from_polyline(points)
+            if reconstructed_shape is not None:
+                shapes_to_add.append(reconstructed_shape)
             
             # Оптимизация 1: Схлопываем процедурные линии (волнистая/с изломами) в единый отрезок
-            if is_procedural and len(points) > 2:
-                s = Segment(points[0][0], points[0][1], points[-1][0], points[-1][1])
-                # Мы не меняем стиль на 'Сплошная основная', а оставляем волнистым!
-                # Сам shape.line_style_name устанавливается ниже для всех.
-                shapes_to_add.append(s)
+            elif is_procedural and len(points) > 2:
+                if is_closed:
+                    if len(points) > 20:
+                        step = max(1, len(points) // 20)
+                        decimated = points[::step]
+                        if decimated[-1] != points[-1]:
+                            decimated.append(points[-1])
+                        s = Spline(decimated)
+                    else:
+                        s = Spline(points)
+                    shapes_to_add.append(s)
+                else:
+                    s = Segment(points[0][0], points[0][1], points[-1][0], points[-1][1])
+                    shapes_to_add.append(s)
             
             elif len(points) > 20:
                 # Оптимизация 2: Децимация обычных сплайнов/тяжелых полилиний
@@ -254,3 +284,133 @@ class DxfImporter:
             shape.line_style_name = style_name
             shape.layer_name = layer_name
             self.shapes.append(shape)
+
+    def _try_create_ellipse_from_polyline(self, points):
+        """Попытаться восстановить эллипс из плотной замкнутой полилинии."""
+        if len(points) < 16:
+            return None
+
+        normalized_points = [(float(x), float(y)) for x, y in points]
+        count = len(normalized_points)
+
+        cx = sum(x for x, _ in normalized_points) / count
+        cy = sum(y for _, y in normalized_points) / count
+
+        centered = [(x - cx, y - cy) for x, y in normalized_points]
+        xx = sum(x * x for x, _ in centered) / count
+        yy = sum(y * y for _, y in centered) / count
+        xy = sum(x * y for x, y in centered) / count
+
+        angle = 0.5 * math.atan2(2.0 * xy, xx - yy)
+        cos_a = math.cos(angle)
+        sin_a = math.sin(angle)
+
+        local_points = [
+            (x * cos_a + y * sin_a, -x * sin_a + y * cos_a)
+            for x, y in centered
+        ]
+
+        min_x = min(x for x, _ in local_points)
+        max_x = max(x for x, _ in local_points)
+        min_y = min(y for _, y in local_points)
+        max_y = max(y for _, y in local_points)
+
+        local_cx = (min_x + max_x) / 2.0
+        local_cy = (min_y + max_y) / 2.0
+
+        world_dx = local_cx * cos_a - local_cy * sin_a
+        world_dy = local_cx * sin_a + local_cy * cos_a
+        cx += world_dx
+        cy += world_dy
+
+        refined_points = []
+        for x, y in normalized_points:
+            dx = x - cx
+            dy = y - cy
+            refined_points.append((
+                dx * cos_a + dy * sin_a,
+                -dx * sin_a + dy * cos_a
+            ))
+
+        rx = max(abs(x) for x, _ in refined_points)
+        ry = max(abs(y) for _, y in refined_points)
+        if rx <= 1e-6 or ry <= 1e-6:
+            return None
+
+        residuals = [
+            abs((x / rx) ** 2 + (y / ry) ** 2 - 1.0)
+            for x, y in refined_points
+        ]
+        mean_residual = sum(residuals) / len(residuals)
+        max_residual = max(residuals)
+
+        if mean_residual > 0.03 or max_residual > 0.12:
+            return None
+
+        return Ellipse(cx, cy, rx, ry, math.degrees(angle))
+
+    def _try_create_circle_from_polyline(self, points):
+        """Попытаться восстановить окружность из плотной замкнутой полилинии."""
+        if len(points) < 16:
+            return None
+
+        normalized_points = [(float(x), float(y)) for x, y in points]
+        count = len(normalized_points)
+
+        cx = sum(x for x, _ in normalized_points) / count
+        cy = sum(y for _, y in normalized_points) / count
+
+        radii = [math.hypot(x - cx, y - cy) for x, y in normalized_points]
+        mean_radius = sum(radii) / len(radii)
+        if mean_radius <= 1e-6:
+            return None
+
+        rel_errors = [abs(radius - mean_radius) / mean_radius for radius in radii]
+        mean_rel_error = sum(rel_errors) / len(rel_errors)
+        max_rel_error = max(rel_errors)
+
+        if mean_rel_error > 0.06 or max_rel_error > 0.16:
+            return None
+
+        return Circle(cx, cy, mean_radius)
+
+    def _try_create_arc_from_polyline(self, points):
+        """Попытаться восстановить дугу из плотной незамкнутой полилинии."""
+        if len(points) < 8:
+            return None
+
+        start = points[0]
+        middle = points[len(points) // 2]
+        end = points[-1]
+
+        candidate = Arc.from_three_points(
+            start[0], start[1],
+            end[0], end[1],
+            middle[0], middle[1]
+        )
+        if candidate is None:
+            return None
+
+        radii = [
+            math.hypot(px - candidate.cx, py - candidate.cy)
+            for px, py in points
+        ]
+        mean_radius = sum(radii) / len(radii)
+        if mean_radius <= 1e-6:
+            return None
+
+        rel_errors = [abs(radius - mean_radius) / mean_radius for radius in radii]
+        if (sum(rel_errors) / len(rel_errors)) > 0.03 or max(rel_errors) > 0.08:
+            return None
+
+        start_point = candidate.get_start_point()
+        end_point = candidate.get_end_point()
+        start_error = math.hypot(start_point[0] - start[0], start_point[1] - start[1])
+        end_error = math.hypot(end_point[0] - end[0], end_point[1] - end[1])
+        if start_error > mean_radius * 0.05 or end_error > mean_radius * 0.05:
+            return None
+
+        if abs(candidate._get_extent()) < 1.0:
+            return None
+
+        return candidate
